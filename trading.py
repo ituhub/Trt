@@ -4,19 +4,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-from alpha_vantage.timeseries import TimeSeries
-from alpha_vantage.foreignexchange import ForeignExchange
-from alpha_vantage.cryptocurrencies import CryptoCurrencies
+import finnhub
 import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
 # Set page configuration
 st.set_page_config(page_title="Automated Trading Bot Dashboard", layout="wide")
 
 # Retrieve API key
-api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+api_key = os.getenv('FINNHUB_API_KEY')
 if not api_key:
-    st.error("Alpha Vantage API key not found. Please set it as an environment variable 'ALPHA_VANTAGE_API_KEY'.")
+    st.error("Finnhub API key not found. Please set it as an environment variable 'FINNHUB_API_KEY'.")
     st.stop()
+
+# Initialize Finnhub client
+finnhub_client = finnhub.Client(api_key=api_key)
 
 # Title and description
 st.title("Automated Trading Bot Dashboard")
@@ -31,82 +33,60 @@ section = st.sidebar.radio("Select Section", ["Commodities", "Forex", "Cryptocur
 # Define tickers based on selection
 if section == "Commodities":
     st.header("Top 5 Profit-Making Commodities")
-    tickers = ['XAUUSD', 'XAGUSD', 'WTI', 'NG', 'HG']  # Gold, Silver, Crude Oil, Natural Gas, Copper
+    tickers = ['CO:GC1!', 'CO:SI1!', 'CO:CL1!', 'CO:NG1!', 'CO:HG1!']  # Gold, Silver, Crude Oil, Natural Gas, Copper Futures
+    asset_class = 'Commodities'
 elif section == "Forex":
     st.header("Top 5 Profit-Making Forex Pairs")
-    tickers = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD']
+    tickers = ['OANDA:EUR_USD', 'OANDA:GBP_USD', 'OANDA:USD_JPY', 'OANDA:AUD_USD', 'OANDA:USD_CAD']
+    asset_class = 'Forex'
 elif section == "Cryptocurrencies":
     st.header("Top 5 Profit-Making Cryptocurrencies")
-    tickers = ['BTC', 'ETH', 'BNB', 'XRP', 'ADA']
+    tickers = ['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT', 'BINANCE:BNBUSDT', 'BINANCE:XRPUSDT', 'BINANCE:ADAUSDT']
+    asset_class = 'Crypto'
 elif section == "Indices":
     st.header("Global Indices Overview")
-    tickers = ['SPX', 'DAX', 'N225', '000001.SS', 'STI', 'AXJO']  # S&P 500, DAX, Nikkei 225, SSE Composite, Straits Times, ASX 200
+    tickers = ['^GSPC', '^GDAXI', '^N225', '000001.SS', '^STI', '^AXJO']  # S&P 500, DAX, Nikkei 225, SSE Composite, Straits Times, ASX 200
+    asset_class = 'Indices'
 
 # Function to fetch data
 def fetch_data(tickers, asset_class):
     data = {}
-    if asset_class == 'Forex':
-        fx = ForeignExchange(key=api_key, output_format='pandas')
-        for ticker in tickers:
-            from_symbol, to_symbol = ticker[:3], ticker[3:]
-            try:
-                df, _ = fx.get_currency_exchange_daily(
-                    from_symbol=from_symbol,
-                    to_symbol=to_symbol,
-                    outputsize='full'
-                )
-                df = df.rename(columns={
-                    '1. open': 'Open',
-                    '2. high': 'High',
-                    '3. low': 'Low',
-                    '4. close': 'Close'
-                })
-                df.index = pd.to_datetime(df.index)
-                df = df.sort_index()
-                data[ticker] = df
-            except Exception as e:
-                st.warning(f"Failed to fetch data for {ticker}: {e}")
-    elif asset_class == 'Cryptocurrencies':
-        cc = CryptoCurrencies(key=api_key, output_format='pandas')
-        for ticker in tickers:
-            try:
-                df, _ = cc.get_digital_currency_daily(
-                    symbol=ticker,
-                    market='USD'
-                )
-                df = df.rename(columns={
-                    '1a. open (USD)': 'Open',
-                    '2a. high (USD)': 'High',
-                    '3a. low (USD)': 'Low',
-                    '4a. close (USD)': 'Close',
-                    '5. volume': 'Volume',
-                    '6. market cap (USD)': 'Market Cap'
-                })
-                df.index = pd.to_datetime(df.index)
-                df = df.sort_index()
-                data[ticker] = df
-            except Exception as e:
-                st.warning(f"Failed to fetch data for {ticker}: {e}")
-    else:
-        ts = TimeSeries(key=api_key, output_format='pandas')
-        for ticker in tickers:
-            try:
-                df, _ = ts.get_daily(
-                    symbol=ticker,
-                    outputsize='full'
-                )
-                df = df.rename(columns={
-                    '1. open': 'Open',
-                    '2. high': 'High',
-                    '3. low': 'Low',
-                    '4. close': 'Close',
-                    '5. volume': 'Volume'
-                })
-                df.index = pd.to_datetime(df.index)
-                df = df.sort_index()
-                data[ticker] = df
-            except Exception as e:
-                st.warning(f"Failed to fetch data for {ticker}: {e}")
+    end_time = int(datetime.now().timestamp())
+    start_time = int((datetime.now() - timedelta(days=365)).timestamp())  # 1 year ago
+    for ticker in tickers:
+        try:
+            # Adjust symbol format for Finnhub if necessary
+            symbol = ticker
+            resolution = 'D'  # Daily data
+
+            # Fetch data based on asset class
+            if asset_class == 'Forex':
+                symbol = ticker.replace('OANDA:', '')
+                candles = finnhub_client.forex_candles(symbol, resolution, start_time, end_time)
+            elif asset_class == 'Crypto':
+                symbol = ticker.replace('BINANCE:', 'BINANCE:')
+                candles = finnhub_client.crypto_candles(symbol, resolution, start_time, end_time)
+            else:
+                candles = finnhub_client.stock_candles(symbol, resolution, start_time, end_time)
+
+            # Check if data is valid
+            if candles['s'] != 'ok':
+                st.warning(f"No data returned for {ticker}")
+                continue
+
+            # Create DataFrame
+            df = pd.DataFrame({
+                'Open': candles['o'],
+                'High': candles['h'],
+                'Low': candles['l'],
+                'Close': candles['c'],
+                'Volume': candles['v']
+            }, index=pd.to_datetime(candles['t'], unit='s'))
+
+            data[ticker] = df
+
+        except Exception as e:
+            st.warning(f"Failed to fetch data for {ticker}: {e}")
     return data
 
 # Functions to compute indicators
@@ -216,7 +196,7 @@ def plot_signals(signal_df, ticker):
     st.pyplot(fig)
 
 # Fetch data
-data = fetch_data(tickers, section)
+data = fetch_data(tickers, asset_class)
 
 if not data:
     st.error("No data fetched. Please check the tickers and API availability.")
