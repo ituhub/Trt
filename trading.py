@@ -2,11 +2,21 @@
 
 import streamlit as st
 import pandas as pd
-import yfinance as yf
+import numpy as np
+import os
+from alpha_vantage.timeseries import TimeSeries
+from alpha_vantage.foreignexchange import ForeignExchange
+from alpha_vantage.cryptocurrencies import CryptoCurrencies
 import matplotlib.pyplot as plt
 
 # Set page configuration
 st.set_page_config(page_title="Automated Trading Bot Dashboard", layout="wide")
+
+# Retrieve API key
+api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+if not api_key:
+    st.error("Alpha Vantage API key not found. Please set it as an environment variable 'ALPHA_VANTAGE_API_KEY'.")
+    st.stop()
 
 # Title and description
 st.title("Automated Trading Bot Dashboard")
@@ -21,23 +31,82 @@ section = st.sidebar.radio("Select Section", ["Commodities", "Forex", "Cryptocur
 # Define tickers based on selection
 if section == "Commodities":
     st.header("Top 5 Profit-Making Commodities")
-    tickers = ['GC=F', 'SI=F', 'CL=F', 'NG=F', 'HG=F']  # Gold, Silver, Crude Oil, Natural Gas, Copper
+    tickers = ['XAUUSD', 'XAGUSD', 'WTI', 'NG', 'HG']  # Gold, Silver, Crude Oil, Natural Gas, Copper
 elif section == "Forex":
     st.header("Top 5 Profit-Making Forex Pairs")
-    tickers = ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'AUDUSD=X', 'USDCAD=X']
+    tickers = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD']
 elif section == "Cryptocurrencies":
     st.header("Top 5 Profit-Making Cryptocurrencies")
-    tickers = ['BTC-USD', 'ETH-USD', 'BNB-USD', 'XRP-USD', 'ADA-USD']
+    tickers = ['BTC', 'ETH', 'BNB', 'XRP', 'ADA']
 elif section == "Indices":
     st.header("Global Indices Overview")
-    tickers = ['^GDAXI', '^GSPC', '^N225', '000001.SS', '^STI', '^AXJO']  # DAX, S&P 500, Nikkei 225, SSE Composite, Straits Times, ASX 200
+    tickers = ['SPX', 'DAX', 'N225', '000001.SS', 'STI', 'AXJO']  # S&P 500, DAX, Nikkei 225, SSE Composite, Straits Times, ASX 200
 
 # Function to fetch data
-def fetch_data(tickers):
+def fetch_data(tickers, asset_class):
     data = {}
-    for ticker in tickers:
-        df = yf.download(ticker, period='1y', interval='1d')
-        data[ticker] = df
+    if asset_class == 'Forex':
+        fx = ForeignExchange(key=api_key, output_format='pandas')
+        for ticker in tickers:
+            from_symbol, to_symbol = ticker[:3], ticker[3:]
+            try:
+                df, _ = fx.get_currency_exchange_daily(
+                    from_symbol=from_symbol,
+                    to_symbol=to_symbol,
+                    outputsize='full'
+                )
+                df = df.rename(columns={
+                    '1. open': 'Open',
+                    '2. high': 'High',
+                    '3. low': 'Low',
+                    '4. close': 'Close'
+                })
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index()
+                data[ticker] = df
+            except Exception as e:
+                st.warning(f"Failed to fetch data for {ticker}: {e}")
+    elif asset_class == 'Cryptocurrencies':
+        cc = CryptoCurrencies(key=api_key, output_format='pandas')
+        for ticker in tickers:
+            try:
+                df, _ = cc.get_digital_currency_daily(
+                    symbol=ticker,
+                    market='USD'
+                )
+                df = df.rename(columns={
+                    '1a. open (USD)': 'Open',
+                    '2a. high (USD)': 'High',
+                    '3a. low (USD)': 'Low',
+                    '4a. close (USD)': 'Close',
+                    '5. volume': 'Volume',
+                    '6. market cap (USD)': 'Market Cap'
+                })
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index()
+                data[ticker] = df
+            except Exception as e:
+                st.warning(f"Failed to fetch data for {ticker}: {e}")
+    else:
+        ts = TimeSeries(key=api_key, output_format='pandas')
+        for ticker in tickers:
+            try:
+                df, _ = ts.get_daily(
+                    symbol=ticker,
+                    outputsize='full'
+                )
+                df = df.rename(columns={
+                    '1. open': 'Open',
+                    '2. high': 'High',
+                    '3. low': 'Low',
+                    '4. close': 'Close',
+                    '5. volume': 'Volume'
+                })
+                df.index = pd.to_datetime(df.index)
+                df = df.sort_index()
+                data[ticker] = df
+            except Exception as e:
+                st.warning(f"Failed to fetch data for {ticker}: {e}")
     return data
 
 # Functions to compute indicators
@@ -69,6 +138,10 @@ def apply_strategies(data):
     strategies_applied = {}
     for ticker, df in data.items():
         df = df.copy()
+        # Ensure there are enough data points
+        if df.shape[0] < 200:
+            st.warning(f"Not enough data for {ticker} to perform analysis.")
+            continue
         # Moving Average Crossover
         df['MA50'] = df['Close'].rolling(window=50).mean()
         df['MA200'] = df['Close'].rolling(window=200).mean()
@@ -143,17 +216,28 @@ def plot_signals(signal_df, ticker):
     st.pyplot(fig)
 
 # Fetch data
-data = fetch_data(tickers)
+data = fetch_data(tickers, section)
+
+if not data:
+    st.error("No data fetched. Please check the tickers and API availability.")
+    st.stop()
 
 # Apply strategies
 strategies_applied = apply_strategies(data)
+
+if not strategies_applied:
+    st.error("Not enough data to apply strategies. Please select a different asset class or wait for more data.")
+    st.stop()
 
 # Generate signals
 signals = generate_signals(strategies_applied)
 
 # Display data and signals
 for ticker in tickers:
-    st.subheader(f"{ticker} Analysis")
-    plot_data(strategies_applied[ticker], ticker)
-    plot_signals(signals[ticker], ticker)
-    st.write(signals[ticker].tail())
+    if ticker in strategies_applied:
+        st.subheader(f"{ticker} Analysis")
+        plot_data(strategies_applied[ticker], ticker)
+        plot_signals(signals[ticker], ticker)
+        st.write(signals[ticker].tail())
+    else:
+        st.warning(f"Not enough data for {ticker} to perform analysis.")
