@@ -50,7 +50,7 @@ section = st.sidebar.radio("Select Asset Class", ["Commodities", "Forex", "Indic
 # Define tickers based on selection
 if section == "Commodities":
     st.header("🌐 Top Commodities")
-    tickers = ['GC', 'CL']  # Gold and Crude Oil Futures
+    tickers = ['GOLD', 'WTI']  # Gold and Crude Oil
     asset_class = 'Commodities'
 elif section == "Forex":
     st.header("💱 Top Forex Pairs")
@@ -58,7 +58,7 @@ elif section == "Forex":
     asset_class = 'Forex'
 elif section == "Indices":
     st.header("📊 Global Indices Overview")
-    tickers = ['^GSPC', 'DAX', 'NIKKEI225']  # S&P 500, DAX, Nikkei 225
+    tickers = ['^GSPC', '^GDAXI', '^N225']  # S&P 500, DAX 40, Nikkei 225
     asset_class = 'Indices'
 
 # Allocate capital per ticker
@@ -77,56 +77,42 @@ def fetch_live_data(tickers, asset_class):
     data = {}
     for ticker in tickers:
         try:
-            # Use appropriate endpoints for different asset classes
             if asset_class == 'Forex':
-                url = f'https://financialmodelingprep.com/api/v3/fx/{ticker}?apikey={api_key}'
-            elif asset_class == 'Commodities':
-                url = f'https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}'
-            elif asset_class == 'Indices':
+                # Fetch intraday data at 5-minute intervals
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
+            elif asset_class in ['Commodities', 'Indices']:
+                # Fetch intraday data at 1-hour intervals
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
             else:
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
 
             response = requests.get(url)
             response.raise_for_status()
             data_json = response.json()
-            
-            if not data_json:
-                raise ValueError("No data returned from API")
 
-            if asset_class == 'Forex':
-                df = pd.DataFrame(data_json)
-                df['date'] = pd.to_datetime(df['timestamp'], unit='s')
-                df.set_index('date', inplace=True)
-                df = df.rename(columns={
-                    'bid': 'Close',
-                    'ask': 'Open'
-                })
-            elif asset_class == 'Commodities':
-                df = pd.DataFrame(data_json)
-                df['date'] = pd.to_datetime(df['timestamp'], unit='s')
-                df.set_index('date', inplace=True)
-                df = df.rename(columns={
-                    'price': 'Close',
-                    'open': 'Open',
-                    'dayHigh': 'High',
-                    'dayLow': 'Low'
-                })
-            else:
-                df = pd.DataFrame(data_json)
-                df['date'] = pd.to_datetime(df['date'])
-                df.set_index('date', inplace=True)
-                df = df.rename(columns={
-                    'close': 'Close',
-                    'open': 'Open',
-                    'high': 'High',
-                    'low': 'Low'
-                })
+            if not data_json:
+                st.warning(f"No data returned for {ticker}.")
+                continue
+
+            df = pd.DataFrame(data_json)
+            if df.empty:
+                st.warning(f"No data available for {ticker}.")
+                continue
+
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df = df.rename(columns={
+                'close': 'Close',
+                'open': 'Open',
+                'high': 'High',
+                'low': 'Low'
+            })
             df = df.sort_index()
             # Filter data for the last 2 days to reduce data size
             df = df[df.index >= (datetime.now() - timedelta(days=2))]
             if df.empty:
-                raise ValueError("DataFrame is empty after filtering")
+                st.warning(f"No recent data available for {ticker}.")
+                continue
             data[ticker] = df
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
@@ -171,6 +157,9 @@ def simulate_trades_live(data):
         if ticker in data:
             df = compute_indicators(data[ticker])
             df = df.dropna()
+            if df.empty:
+                st.warning(f"No data to process for {ticker}.")
+                continue
             df = generate_signals(df)
             allocated = st.session_state.allocated_capital[ticker]
             position = st.session_state.open_positions[ticker]
@@ -284,7 +273,7 @@ if any(position is not None for position in st.session_state.open_positions.valu
     open_positions_list = []
     for ticker, position in st.session_state.open_positions.items():
         if position:
-            if ticker in data:
+            if ticker in data and not data[ticker].empty:
                 current_price = data[ticker]['Close'][-1]
                 profit_loss = (current_price - position['Buy_Price']) * position['Quantity']
                 open_positions_list.append({
@@ -314,6 +303,9 @@ for ticker in tickers:
     if ticker in data:
         df = compute_indicators(data[ticker])
         df = df.dropna()
+        if df.empty:
+            st.warning(f"No data to display for {ticker}.")
+            continue
         df = generate_signals(df)
 
         # Find buy and sell points from trade_history
@@ -378,8 +370,3 @@ for ticker in tickers:
 # Footer
 st.markdown("---")
 st.markdown("<center>© 2023 Trading Bot Dashboard | Powered by Streamlit</center>", unsafe_allow_html=True)
-
-# Optional: Refresh data every 5 minutes (commented out to avoid infinite loop in deployment)
-# if st.session_state.last_update_time is None or (datetime.now() - st.session_state.last_update_time).seconds > 300:
-#     st.session_state.last_update_time = datetime.now()
-#     st.experimental_rerun()
