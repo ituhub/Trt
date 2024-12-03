@@ -45,20 +45,20 @@ Welcome to the professional trading bot dashboard. This tool analyzes top-perfor
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-section = st.sidebar.radio("Select Asset Class", ["Commodities", "Forex", "Indices"])
+section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices"])
 
 # Define tickers based on selection
-if section == "Commodities":
-    st.header("🌐 Top Commodities")
-    tickers = ['GOLD', 'WTI']  # Gold and Crude Oil
-    asset_class = 'Commodities'
-elif section == "Forex":
+if section == "Forex":
     st.header("💱 Top Forex Pairs")
     tickers = ['EURUSD', 'GBPUSD', 'USDJPY']
     asset_class = 'Forex'
+elif section == "Commodities":
+    st.header("🌐 Top Commodities")
+    tickers = ['XAUUSD', 'XAGUSD']  # Gold and Silver
+    asset_class = 'Commodities'
 elif section == "Indices":
     st.header("📊 Global Indices Overview")
-    tickers = ['^GSPC', '^GDAXI', '^N225']  # S&P 500, DAX 40, Nikkei 225
+    tickers = ['^GSPC', '^DJI', '^IXIC']  # S&P 500, Dow Jones, Nasdaq
     asset_class = 'Indices'
 
 # Allocate capital per ticker
@@ -80,9 +80,12 @@ def fetch_live_data(tickers, asset_class):
             if asset_class == 'Forex':
                 # Fetch intraday data at 5-minute intervals
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
-            elif asset_class in ['Commodities', 'Indices']:
+            elif asset_class == 'Commodities':
                 # Fetch intraday data at 1-hour intervals
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
+            elif asset_class == 'Indices':
+                # For indices, use the daily historical endpoint
+                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?timeseries=30&apikey={api_key}'
             else:
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
 
@@ -94,7 +97,12 @@ def fetch_live_data(tickers, asset_class):
                 st.warning(f"No data returned for {ticker}.")
                 continue
 
-            df = pd.DataFrame(data_json)
+            if asset_class == 'Indices':
+                # For indices, data is under 'historical' key
+                df = pd.DataFrame(data_json.get('historical', []))
+            else:
+                df = pd.DataFrame(data_json)
+
             if df.empty:
                 st.warning(f"No data available for {ticker}.")
                 continue
@@ -108,8 +116,11 @@ def fetch_live_data(tickers, asset_class):
                 'low': 'Low'
             })
             df = df.sort_index()
-            # Filter data for the last 2 days to reduce data size
-            df = df[df.index >= (datetime.now() - timedelta(days=2))]
+            # Filter data for the last 2 days for intraday data or last 30 days for daily data
+            if asset_class == 'Indices':
+                df = df[df.index >= (datetime.utcnow() - timedelta(days=30))]
+            else:
+                df = df[df.index >= (datetime.utcnow() - timedelta(days=2))]
             if df.empty:
                 st.warning(f"No recent data available for {ticker}.")
                 continue
@@ -119,10 +130,16 @@ def fetch_live_data(tickers, asset_class):
     return data
 
 # Functions to compute indicators
-def compute_indicators(df):
+def compute_indicators(df, asset_class):
     df = df.copy()
-    df['MA_Short'] = df['Close'].rolling(window=10).mean()
-    df['MA_Long'] = df['Close'].rolling(window=30).mean()
+    if asset_class == 'Indices':
+        # Use longer windows for daily data
+        df['MA_Short'] = df['Close'].rolling(window=10).mean()
+        df['MA_Long'] = df['Close'].rolling(window=30).mean()
+    else:
+        # Use shorter windows for intraday data
+        df['MA_Short'] = df['Close'].rolling(window=10).mean()
+        df['MA_Long'] = df['Close'].rolling(window=30).mean()
     df['RSI'] = compute_RSI(df['Close'])
     df['MACD'], df['MACD_Signal'] = compute_MACD(df['Close'])
     return df
@@ -155,7 +172,7 @@ def generate_signals(df):
 def simulate_trades_live(data):
     for ticker in tickers:
         if ticker in data:
-            df = compute_indicators(data[ticker])
+            df = compute_indicators(data[ticker], asset_class)
             df = df.dropna()
             if df.empty:
                 st.warning(f"No data to process for {ticker}.")
@@ -301,7 +318,7 @@ st.header("🔍 Trade Signals and Price Charts")
 
 for ticker in tickers:
     if ticker in data:
-        df = compute_indicators(data[ticker])
+        df = compute_indicators(data[ticker], asset_class)
         df = df.dropna()
         if df.empty:
             st.warning(f"No data to display for {ticker}.")
@@ -335,9 +352,9 @@ for ticker in tickers:
 
         # Add Buy/Sell markers
         if trades:
-            buy_times = [trade['Buy_Time'] for trade in trades]
+            buy_times = [pd.to_datetime(trade['Buy_Time']) for trade in trades]
             buy_prices = [trade['Buy_Price'] for trade in trades]
-            sell_times = [trade['Sell_Time'] for trade in trades]
+            sell_times = [pd.to_datetime(trade['Sell_Time']) for trade in trades]
             sell_prices = [trade['Sell_Price'] for trade in trades]
 
             fig.add_trace(go.Scatter(
