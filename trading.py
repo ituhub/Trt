@@ -7,7 +7,6 @@ import os
 import requests
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import time
 
 # Set page configuration
 st.set_page_config(
@@ -51,7 +50,7 @@ section = st.sidebar.radio("Select Asset Class", ["Commodities", "Forex", "Indic
 # Define tickers based on selection
 if section == "Commodities":
     st.header("🌐 Top Commodities")
-    tickers = ['GOLD', 'WTI']  # Gold and Crude Oil
+    tickers = ['GC', 'CL']  # Gold and Crude Oil Futures
     asset_class = 'Commodities'
 elif section == "Forex":
     st.header("💱 Top Forex Pairs")
@@ -59,7 +58,7 @@ elif section == "Forex":
     asset_class = 'Forex'
 elif section == "Indices":
     st.header("📊 Global Indices Overview")
-    tickers = ['^GSPC', '^GDAXI', '^N225']  # S&P 500, DAX 40, Nikkei 225
+    tickers = ['^GSPC', 'DAX', 'NIKKEI225']  # S&P 500, DAX, Nikkei 225
     asset_class = 'Indices'
 
 # Allocate capital per ticker
@@ -78,28 +77,56 @@ def fetch_live_data(tickers, asset_class):
     data = {}
     for ticker in tickers:
         try:
-            if asset_class in ['Forex', 'Commodities', 'Indices']:
-                # Fetch the latest intraday data (5-minute intervals)
+            # Use appropriate endpoints for different asset classes
+            if asset_class == 'Forex':
+                url = f'https://financialmodelingprep.com/api/v3/fx/{ticker}?apikey={api_key}'
+            elif asset_class == 'Commodities':
+                url = f'https://financialmodelingprep.com/api/v3/quote/{ticker}?apikey={api_key}'
+            elif asset_class == 'Indices':
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
             else:
-                # Default to daily data
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
 
             response = requests.get(url)
             response.raise_for_status()
             data_json = response.json()
-            df = pd.DataFrame(data_json)
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
-            df = df.rename(columns={
-                'close': 'Close',
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low'
-            })
+            
+            if not data_json:
+                raise ValueError("No data returned from API")
+
+            if asset_class == 'Forex':
+                df = pd.DataFrame(data_json)
+                df['date'] = pd.to_datetime(df['timestamp'], unit='s')
+                df.set_index('date', inplace=True)
+                df = df.rename(columns={
+                    'bid': 'Close',
+                    'ask': 'Open'
+                })
+            elif asset_class == 'Commodities':
+                df = pd.DataFrame(data_json)
+                df['date'] = pd.to_datetime(df['timestamp'], unit='s')
+                df.set_index('date', inplace=True)
+                df = df.rename(columns={
+                    'price': 'Close',
+                    'open': 'Open',
+                    'dayHigh': 'High',
+                    'dayLow': 'Low'
+                })
+            else:
+                df = pd.DataFrame(data_json)
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                df = df.rename(columns={
+                    'close': 'Close',
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low'
+                })
             df = df.sort_index()
             # Filter data for the last 2 days to reduce data size
             df = df[df.index >= (datetime.now() - timedelta(days=2))]
+            if df.empty:
+                raise ValueError("DataFrame is empty after filtering")
             data[ticker] = df
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
@@ -188,6 +215,7 @@ def simulate_trades_live(data):
                     st.session_state.open_positions[ticker] = None
         else:
             st.warning(f"No data available for {ticker}.")
+    return
 
 # Fetch live data
 data = fetch_live_data(tickers, asset_class)
@@ -256,18 +284,24 @@ if any(position is not None for position in st.session_state.open_positions.valu
     open_positions_list = []
     for ticker, position in st.session_state.open_positions.items():
         if position:
-            current_price = data[ticker]['Close'][-1]
-            profit_loss = (current_price - position['Buy_Price']) * position['Quantity']
-            open_positions_list.append({
-                'Ticker': ticker,
-                'Buy_Time': position['Buy_Time'].strftime('%Y-%m-%d %H:%M'),
-                'Buy_Price': position['Buy_Price'],
-                'Current_Price': current_price,
-                'Profit/Loss': profit_loss
-            })
-    open_positions_df = pd.DataFrame(open_positions_list)
-    open_positions_df['Profit/Loss'] = open_positions_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
-    st.dataframe(open_positions_df.style.format({'Buy_Price': '${:,.2f}', 'Current_Price': '${:,.2f}'}))
+            if ticker in data:
+                current_price = data[ticker]['Close'][-1]
+                profit_loss = (current_price - position['Buy_Price']) * position['Quantity']
+                open_positions_list.append({
+                    'Ticker': ticker,
+                    'Buy_Time': position['Buy_Time'].strftime('%Y-%m-%d %H:%M'),
+                    'Buy_Price': position['Buy_Price'],
+                    'Current_Price': current_price,
+                    'Profit/Loss': profit_loss
+                })
+            else:
+                st.warning(f"No current price data available for {ticker}.")
+    if open_positions_list:
+        open_positions_df = pd.DataFrame(open_positions_list)
+        open_positions_df['Profit/Loss'] = open_positions_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(open_positions_df.style.format({'Buy_Price': '${:,.2f}', 'Current_Price': '${:,.2f}'}))
+    else:
+        st.info("No open positions to display.")
 else:
     st.info("No open positions.")
 
@@ -345,6 +379,7 @@ for ticker in tickers:
 st.markdown("---")
 st.markdown("<center>© 2023 Trading Bot Dashboard | Powered by Streamlit</center>", unsafe_allow_html=True)
 
-# Refresh data every 5 minutes
-if st.session_state.last_update_time is None or (datetime.now() - st.session_state.last_update_time).seconds > 300:
-    st.experimental_rerun()
+# Optional: Refresh data every 5 minutes (commented out to avoid infinite loop in deployment)
+# if st.session_state.last_update_time is None or (datetime.now() - st.session_state.last_update_time).seconds > 300:
+#     st.session_state.last_update_time = datetime.now()
+#     st.experimental_rerun()
