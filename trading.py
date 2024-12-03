@@ -58,22 +58,28 @@ for ticker in tickers:
     allocated_capital[ticker] = capital_per_ticker
     open_positions[ticker] = None  # None indicates no open position
 
-# Function to fetch data from FMP
-def fetch_data(tickers, asset_class):
+# Function to fetch live data from FMP
+def fetch_live_data(tickers, asset_class):
     data = {}
     for ticker in tickers:
         try:
             if asset_class == 'Forex':
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
+                # Fetch the latest intraday data (5-minute intervals)
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
+            elif asset_class == 'Commodities':
+                # Fetch the latest intraday data for commodities
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
+            elif asset_class == 'Indices':
+                # Fetch the latest intraday data for indices
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
             else:
-                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?apikey={api_key}'
+                # Default to daily data
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
+
             response = requests.get(url)
             response.raise_for_status()
             data_json = response.json()
-            if asset_class == 'Forex':
-                df = pd.DataFrame(data_json)
-            else:
-                df = pd.DataFrame(data_json['historical'])
+            df = pd.DataFrame(data_json)
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
             df = df.rename(columns={
@@ -83,6 +89,8 @@ def fetch_data(tickers, asset_class):
                 'low': 'Low'
             })
             df = df.sort_index()
+            # Filter data for the last 2 days to reduce data size
+            df = df[df.index >= (datetime.now() - timedelta(days=2))]
             data[ticker] = df
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
@@ -91,8 +99,8 @@ def fetch_data(tickers, asset_class):
 # Functions to compute indicators
 def compute_indicators(df):
     df = df.copy()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
-    df['MA200'] = df['Close'].rolling(window=200).mean()
+    df['MA50'] = df['Close'].rolling(window=10).mean()
+    df['MA200'] = df['Close'].rolling(window=30).mean()
     df['RSI'] = compute_RSI(df['Close'])
     df['BB_Middle'] = df['Close'].rolling(window=20).mean()
     df['BB_Std'] = df['Close'].rolling(window=20).std()
@@ -132,64 +140,67 @@ def generate_signals(df):
     return df
 
 # Function to simulate trades
-def simulate_trades(data):
+def simulate_trades_live(data):
     global balance
     for ticker in tickers:
         if ticker in data:
             df = compute_indicators(data[ticker])
             df = df.dropna()
             df = generate_signals(df)
-            
             allocated = allocated_capital[ticker]
             position = open_positions[ticker]
-            
-            for current_time, row in df.iterrows():
-                signal = row['Signal']
-                price = row['Close']
-                
-                if position is None:
-                    if signal == 1:
-                        # Execute Buy
-                        quantity = allocated / price
-                        buy_price = price
-                        position = {
-                            'Buy_Time': current_time,
-                            'Buy_Price': buy_price,
-                            'Quantity': quantity
-                        }
-                        open_positions[ticker] = position
-                        # Update balance
-                        balance -= allocated
-                        balance_history.append({'Time': current_time, 'Balance': balance})
-                else:
-                    # Check if 10% profit achieved or sell signal
-                    if price >= position['Buy_Price'] * 1.10 or signal == -1:
-                        sell_price = price
-                        profit = (sell_price - position['Buy_Price']) * position['Quantity']
-                        balance += allocated + profit
-                        balance_history.append({'Time': current_time, 'Balance': balance})
-                        trade_history.append({
-                            'Ticker': ticker,
-                            'Buy_Time': position['Buy_Time'],
-                            'Buy_Price': position['Buy_Price'],
-                            'Sell_Time': current_time,
-                            'Sell_Price': sell_price,
-                            'Profit/Loss': profit
-                        })
-                        open_positions[ticker] = None
+
+            # Only process the most recent data point
+            current_time = df.index[-1]
+            row = df.iloc[-1]
+            signal = row['Signal']
+            price = row['Close']
+
+            if position is None:
+                if signal == 1:
+                    # Execute Buy
+                    quantity = allocated / price
+                    buy_price = price
+                    position = {
+                        'Buy_Time': current_time,
+                        'Buy_Price': buy_price,
+                        'Quantity': quantity
+                    }
+                    open_positions[ticker] = position
+                    # Update balance
+                    balance -= allocated
+                    balance_history.append({'Time': current_time, 'Balance': balance})
+                    st.write(f"Bought {ticker} at {buy_price:.2f} on {current_time}")
+            else:
+                # Check if 10% profit achieved or sell signal
+                if price >= position['Buy_Price'] * 1.10 or signal == -1:
+                    sell_price = price
+                    profit = (sell_price - position['Buy_Price']) * position['Quantity']
+                    balance += allocated + profit
+                    balance_history.append({'Time': current_time, 'Balance': balance})
+                    trade_history.append({
+                        'Ticker': ticker,
+                        'Buy_Time': position['Buy_Time'],
+                        'Buy_Price': position['Buy_Price'],
+                        'Sell_Time': current_time,
+                        'Sell_Price': sell_price,
+                        'Profit/Loss': profit
+                    })
+                    st.write(f"Sold {ticker} at {sell_price:.2f} on {current_time} | Profit: ${profit:.2f}")
+                    open_positions[ticker] = None
         else:
             st.warning(f"No data available for {ticker}.")
     return trade_history
 
-# Fetch data
-data = fetch_data(tickers, asset_class)
+# Fetch live data
+data = fetch_live_data(tickers, asset_class)
 
 if not data:
     st.error("No data fetched. Please check the tickers and API availability.")
     st.stop()
 
-# Simulate trades
-trade_history = simulate_trades(data)
+# Simulate trades on live data
+trade_history = simulate_trades_live(data)
 
 # Main layout
 st.markdown("---")
@@ -232,8 +243,8 @@ st.markdown("---")
 st.header("📝 Trade History")
 if trade_history:
     trades_df = pd.DataFrame(trade_history)
-    trades_df['Buy_Time'] = trades_df['Buy_Time'].dt.strftime('%Y-%m-%d')
-    trades_df['Sell_Time'] = trades_df['Sell_Time'].dt.strftime('%Y-%m-%d')
+    trades_df['Buy_Time'] = trades_df['Buy_Time'].dt.strftime('%Y-%m-%d %H:%M')
+    trades_df['Sell_Time'] = trades_df['Sell_Time'].dt.strftime('%Y-%m-%d %H:%M')
     trades_df['Profit/Loss'] = trades_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
     trades_df_display = trades_df[['Ticker', 'Buy_Time', 'Buy_Price', 'Sell_Time', 'Sell_Price', 'Profit/Loss']]
     st.dataframe(trades_df_display.style.format({'Buy_Price': '${:,.2f}', 'Sell_Price': '${:,.2f}'}))
@@ -252,7 +263,7 @@ if any(position is not None for position in open_positions.values()):
             profit_loss = (current_price - position['Buy_Price']) * position['Quantity']
             open_positions_list.append({
                 'Ticker': ticker,
-                'Buy_Time': position['Buy_Time'].strftime('%Y-%m-%d'),
+                'Buy_Time': position['Buy_Time'].strftime('%Y-%m-%d %H:%M'),
                 'Buy_Price': position['Buy_Price'],
                 'Current_Price': current_price,
                 'Profit/Loss': profit_loss
@@ -273,13 +284,13 @@ for ticker in tickers:
         df = compute_indicators(data[ticker])
         df = df.dropna()
         df = generate_signals(df)
-        
+
         # Find buy and sell points from trade_history
         trades = [trade for trade in trade_history if trade['Ticker'] == ticker]
         position = open_positions[ticker]
-        
+
         st.subheader(f"{ticker} Price Chart with Trade Signals")
-        
+
         # Prepare data for plotting
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
@@ -298,14 +309,14 @@ for ticker in tickers:
         fig.add_trace(go.Scatter(
             x=df.index, y=df['MA200'], line=dict(color='orange', width=1), name='MA200'
         ))
-        
+
         # Add Buy/Sell markers
         if trades:
             buy_times = [trade['Buy_Time'] for trade in trades]
             buy_prices = [trade['Buy_Price'] for trade in trades]
             sell_times = [trade['Sell_Time'] for trade in trades]
             sell_prices = [trade['Sell_Price'] for trade in trades]
-            
+
             fig.add_trace(go.Scatter(
                 x=buy_times, y=buy_prices, mode='markers', marker_symbol='triangle-up', marker_color='green',
                 marker_size=12, name='Buy Signal'
@@ -314,14 +325,14 @@ for ticker in tickers:
                 x=sell_times, y=sell_prices, mode='markers', marker_symbol='triangle-down', marker_color='red',
                 marker_size=12, name='Sell Signal'
             ))
-        
+
         # Add current open position marker
         if position:
             fig.add_trace(go.Scatter(
                 x=[position['Buy_Time']], y=[position['Buy_Price']], mode='markers',
                 marker_symbol='star', marker_color='gold', marker_size=15, name='Open Position'
             ))
-        
+
         fig.update_layout(xaxis_title='Date', yaxis_title='Price ($)', height=500)
         st.plotly_chart(fig, use_container_width=True)
     else:
