@@ -6,6 +6,7 @@ import numpy as np
 import os
 import requests
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # Set page configuration
@@ -23,9 +24,10 @@ balance = initial_balance
 allocated_capital = {}  # Capital allocated per ticker
 open_positions = {}     # Track open positions per ticker
 trade_history = []      # List to store trade details
+balance_history = []    # Track balance over time
 
 # Title and description
-st.title("Automated Trading Bot Dashboard")
+st.title("📈 Automated Trading Bot Dashboard")
 st.markdown("""
 Welcome to the trading bot dashboard. This tool analyzes top-performing commodities, forex pairs, and indices to provide trading signals based on advanced strategies.
 """)
@@ -36,15 +38,15 @@ section = st.sidebar.radio("Select Section", ["Commodities", "Forex", "Indices"]
 
 # Define tickers based on selection
 if section == "Commodities":
-    st.header("Top Commodities")
+    st.header("🌐 Top Commodities")
     tickers = ['GOLD', 'WTI']  # Gold and Crude Oil
     asset_class = 'Commodities'
 elif section == "Forex":
-    st.header("Top Forex Pairs")
+    st.header("💱 Top Forex Pairs")
     tickers = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD']
     asset_class = 'Forex'
 elif section == "Indices":
-    st.header("Global Indices Overview")
+    st.header("📊 Global Indices Overview")
     tickers = ['^GSPC', '^GDAXI', '^N225']  # S&P 500, DAX 40, Nikkei 225
     asset_class = 'Indices'
 
@@ -166,13 +168,16 @@ def simulate_trades(data):
                             'Quantity': quantity
                         }
                         open_positions[ticker] = position
-                        st.write(f"Bought {ticker} at {buy_price:.2f} on {current_time.date()}")
+                        # Update balance
+                        balance -= allocated
+                        balance_history.append({'Time': current_time, 'Balance': balance})
                 else:
                     # Check if 10% profit achieved
                     if price >= position['Buy_Price'] * 1.10:
                         sell_price = price
                         profit = (sell_price - position['Buy_Price']) * position['Quantity']
-                        balance += profit
+                        balance += allocated + profit
+                        balance_history.append({'Time': current_time, 'Balance': balance})
                         trade_history.append({
                             'Ticker': ticker,
                             'Buy_Time': position['Buy_Time'],
@@ -183,7 +188,6 @@ def simulate_trades(data):
                             'Close_Price': sell_price,
                             'Profit/Loss': profit
                         })
-                        st.write(f"Sold {ticker} at {sell_price:.2f} on {current_time.date()} | Profit: ${profit:.2f}")
                         open_positions[ticker] = None
     return trade_history
 
@@ -197,35 +201,64 @@ if not data:
 # Simulate trades
 trade_history = simulate_trades(data)
 
-# Display Account Balance
-st.sidebar.header("Account Overview")
-st.sidebar.write(f"**Initial Balance:** ${initial_balance:,.2f}")
-st.sidebar.write(f"**Current Balance:** ${balance:,.2f}")
+# Display Account Overview in Sidebar
+st.sidebar.header("💰 Account Overview")
+st.sidebar.markdown(f"**Initial Balance:** ${initial_balance:,.2f}")
+st.sidebar.markdown(f"**Current Balance:** ${balance:,.2f}")
+if trade_history:
+    total_profit = sum([trade['Profit/Loss'] for trade in trade_history])
+    st.sidebar.markdown(f"**Total Profit/Loss:** ${total_profit:,.2f}")
+else:
+    st.sidebar.markdown("**Total Profit/Loss:** $0.00")
 
 # Display Trade History
+st.header("📝 Trade History")
 if trade_history:
-    st.header("Trade History")
     trades_df = pd.DataFrame(trade_history)
+    trades_df['Buy_Time'] = trades_df['Buy_Time'].dt.strftime('%Y-%m-%d')
+    trades_df['Sell_Time'] = trades_df['Sell_Time'].dt.strftime('%Y-%m-%d')
     trades_df['Profit/Loss'] = trades_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
-    st.dataframe(trades_df)
-    
-    # Calculate Total Profit/Loss
-    total_profit = sum([trade['Profit/Loss'] for trade in trade_history])
-    st.write(f"**Total Profit/Loss:** ${total_profit:,.2f}")
+    trades_df_display = trades_df[['Ticker', 'Buy_Time', 'Buy_Price', 'Sell_Time', 'Sell_Price', 'Profit/Loss']]
+    st.dataframe(trades_df_display.style.format({'Buy_Price': '${:,.2f}', 'Sell_Price': '${:,.2f}'}))
 else:
     st.info("No trades executed yet.")
 
-# Visualization: Account Balance Over Time
-# For simplicity, we can plot the final balance
-st.header("Account Performance")
-fig, ax = plt.subplots(figsize=(10, 4))
-ax.bar(['Initial Balance', 'Current Balance'], [initial_balance, balance], color=['blue', 'green'])
-ax.set_ylabel('Balance ($)')
-ax.set_title('Account Balance Overview')
-st.pyplot(fig)
+# Display Open Positions
+st.header("📌 Current Open Positions")
+open_positions_list = []
+for ticker, position in open_positions.items():
+    if position:
+        current_price = data[ticker]['Close'][-1]
+        profit_loss = (current_price - position['Buy_Price']) * position['Quantity']
+        open_positions_list.append({
+            'Ticker': ticker,
+            'Buy_Time': position['Buy_Time'].strftime('%Y-%m-%d'),
+            'Buy_Price': position['Buy_Price'],
+            'Current_Price': current_price,
+            'Profit/Loss': profit_loss
+        })
 
-# Display Buy/Sell Signals and Prices per Ticker
-st.header("Trade Signals and Prices")
+if open_positions_list:
+    open_positions_df = pd.DataFrame(open_positions_list)
+    open_positions_df['Profit/Loss'] = open_positions_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
+    st.dataframe(open_positions_df.style.format({'Buy_Price': '${:,.2f}', 'Current_Price': '${:,.2f}'}))
+else:
+    st.info("No open positions.")
+
+# Visualization: Account Balance Over Time
+st.header("📈 Account Performance")
+if balance_history:
+    balance_df = pd.DataFrame(balance_history)
+    balance_df = balance_df.drop_duplicates(subset=['Time'])
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=balance_df['Time'], y=balance_df['Balance'], mode='lines+markers', name='Balance'))
+    fig.update_layout(title='Account Balance Over Time', xaxis_title='Time', yaxis_title='Balance ($)')
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("No account activity to display.")
+
+# Display Trade Signals and Prices per Ticker
+st.header("🔍 Trade Signals and Prices")
 
 for ticker in tickers:
     if ticker in data:
@@ -235,47 +268,55 @@ for ticker in tickers:
         
         # Find buy and sell points from trade_history
         trades = [trade for trade in trade_history if trade['Ticker'] == ticker]
+        position = open_positions[ticker]
         
-        if trades:
-            for trade in trades:
-                st.write(f"**{ticker} Trade:**")
-                st.write(f"Buy at **${trade['Buy_Price']:.2f}** on {trade['Buy_Time'].date()}")
-                st.write(f"Sell at **${trade['Sell_Price']:.2f}** on {trade['Sell_Time'].date()}")
-                st.write(f"Closed at **${trade['Close_Price']:.2f}** on {trade['Close_Time'].date()} | Profit/Loss: {trade['Profit/Loss']}")
-        else:
-            st.write(f"No trades executed for {ticker}.")
-    else:
-        st.warning(f"No data available for {ticker}.")
-
-# Display Combined Signals and Final Signals (if needed)
-# Since we've simplified signals to 'Buy' or 'Sell', they are already displayed above.
-
-# Optional: Display Data Charts with Trade Signals
-st.header("Price Charts with Trade Signals")
-
-for ticker in tickers:
-    if ticker in data:
-        df = compute_indicators(data[ticker])
-        df = df.dropna()
-        df = generate_signals(df)
+        st.subheader(f"{ticker} Price Chart with Trade Signals")
         
-        trades = [trade for trade in trade_history if trade['Ticker'] == ticker]
+        # Prepare data for plotting
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Price'
+        ))
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['MA50'], line=dict(color='blue', width=1), name='MA50'
+        ))
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['MA200'], line=dict(color='orange', width=1), name='MA200'
+        ))
         
+        # Add Buy/Sell markers
         if trades:
             buy_times = [trade['Buy_Time'] for trade in trades]
             buy_prices = [trade['Buy_Price'] for trade in trades]
             sell_times = [trade['Sell_Time'] for trade in trades]
             sell_prices = [trade['Sell_Price'] for trade in trades]
             
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(df.index, df['Close'], label='Close Price', color='blue')
-            ax.scatter(buy_times, buy_prices, label='Buy Signal', marker='^', color='green', s=100)
-            ax.scatter(sell_times, sell_prices, label='Sell Signal', marker='v', color='red', s=100)
-            ax.set_title(f"{ticker} Price Chart with Buy/Sell Signals")
-            ax.set_xlabel('Date')
-            ax.set_ylabel('Price ($)')
-            ax.legend()
-            st.pyplot(fig)
+            fig.add_trace(go.Scatter(
+                x=buy_times, y=buy_prices, mode='markers', marker_symbol='triangle-up', marker_color='green',
+                marker_size=10, name='Buy Signal'
+            ))
+            fig.add_trace(go.Scatter(
+                x=sell_times, y=sell_prices, mode='markers', marker_symbol='triangle-down', marker_color='red',
+                marker_size=10, name='Sell Signal'
+            ))
+        
+        # Add current open position marker
+        if position:
+            fig.add_trace(go.Scatter(
+                x=[position['Buy_Time']], y=[position['Buy_Price']], mode='markers',
+                marker_symbol='star', marker_color='gold', marker_size=15, name='Open Position'
+            ))
+        
+        fig.update_layout(title=f"{ticker} Price Chart", xaxis_title='Date', yaxis_title='Price ($)')
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning(f"No data available for {ticker}.")
 
+# Footer
+st.markdown("---")
+st.markdown("© 2023 Trading Bot Dashboard | Powered by Streamlit")
