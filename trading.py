@@ -34,8 +34,6 @@ if 'trade_history' not in st.session_state:
     st.session_state.trade_history = []
 if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
-if 'last_update_time' not in st.session_state:
-    st.session_state.last_update_time = None
 
 # Title and description
 st.title("🚀 Automated Trading Bot Dashboard")
@@ -50,11 +48,11 @@ section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indic
 # Define tickers based on selection
 if section == "Forex":
     st.header("💱 Top Forex Pairs")
-    tickers = ['EURUSD', 'GBPUSD', 'USDJPY']
+    tickers = ['EUR/USD', 'GBP/USD', 'USD/JPY']
     asset_class = 'Forex'
 elif section == "Commodities":
     st.header("🌐 Top Commodities")
-    tickers = ['XAUUSD', 'XAGUSD']  # Gold and Silver
+    tickers = ['XAU/USD', 'XAG/USD']  # Gold and Silver
     asset_class = 'Commodities'
 elif section == "Indices":
     st.header("📊 Global Indices Overview")
@@ -77,17 +75,16 @@ def fetch_live_data(tickers, asset_class):
     data = {}
     for ticker in tickers:
         try:
-            if asset_class == 'Forex':
+            # Replace '/' in forex tickers with empty string for API compatibility
+            ticker_api = ticker.replace('/', '')
+            if asset_class == 'Forex' or asset_class == 'Commodities':
                 # Fetch intraday data at 5-minute intervals
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
-            elif asset_class == 'Commodities':
-                # Fetch intraday data at 1-hour intervals
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
             elif asset_class == 'Indices':
                 # For indices, use the daily historical endpoint
-                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?timeseries=30&apikey={api_key}'
+                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
             else:
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
 
             response = requests.get(url)
             response.raise_for_status()
@@ -134,8 +131,8 @@ def compute_indicators(df, asset_class):
     df = df.copy()
     if asset_class == 'Indices':
         # Use longer windows for daily data
-        df['MA_Short'] = df['Close'].rolling(window=10).mean()
-        df['MA_Long'] = df['Close'].rolling(window=30).mean()
+        df['MA_Short'] = df['Close'].rolling(window=5).mean()
+        df['MA_Long'] = df['Close'].rolling(window=20).mean()
     else:
         # Use shorter windows for intraday data
         df['MA_Short'] = df['Close'].rolling(window=10).mean()
