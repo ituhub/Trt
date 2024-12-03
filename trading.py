@@ -7,9 +7,6 @@ import os
 import requests
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
 
 # Set page configuration
 st.set_page_config(page_title="Automated Trading Bot Dashboard", layout="wide")
@@ -32,11 +29,11 @@ section = st.sidebar.radio("Select Section", ["Commodities", "Forex", "Indices"]
 
 # Define tickers based on selection
 if section == "Commodities":
-    st.header("Top 5 Commodities")
-    tickers = ['GOLD', 'SILVER', 'WTI', 'NATURAL_GAS', 'COPPER']
+    st.header("Top Commodities")
+    tickers = ['GOLD', 'WTI']  # Gold and Crude Oil
     asset_class = 'Commodities'
 elif section == "Forex":
-    st.header("Top 5 Forex Pairs")
+    st.header("Top Forex Pairs")
     tickers = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD']
     asset_class = 'Forex'
 elif section == "Indices":
@@ -51,21 +48,22 @@ def fetch_data(tickers, asset_class):
         try:
             if asset_class == 'Forex':
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/1hour/{ticker}?apikey={api_key}'
-            else:
-                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?apikey={api_key}&serietype=line'
-            response = requests.get(url)
-            response.raise_for_status()
-            data_json = response.json()
-            if asset_class == 'Forex':
+                response = requests.get(url)
+                response.raise_for_status()
+                data_json = response.json()
                 df = pd.DataFrame(data_json)
                 df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
-                df = df.rename(columns={'close': 'Close'})
+                df = df.rename(columns={'close': 'Close', 'open': 'Open'})
             else:
+                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?apikey={api_key}'
+                response = requests.get(url)
+                response.raise_for_status()
+                data_json = response.json()
                 df = pd.DataFrame(data_json['historical'])
                 df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
-                df = df.rename(columns={'close': 'Close'})
+                df = df.rename(columns={'close': 'Close', 'open': 'Open'})
             df = df.sort_index()
             data[ticker] = df
         except Exception as e:
@@ -104,28 +102,24 @@ def compute_MACD(series):
     return macd, signal_line
 
 def compute_stochastic(df, period=14):
-    lowest_low = df['Close'].rolling(window=period).min()
-    highest_high = df['Close'].rolling(window=period).max()
+    lowest_low = df['Low'].rolling(window=period).min()
+    highest_high = df['High'].rolling(window=period).max()
     stochastic = 100 * ((df['Close'] - lowest_low) / (highest_high - lowest_low))
     return stochastic
 
 # Function to generate combined signal
-def generate_signal(df):
+def generate_signals(df):
     df['Signal'] = 0
     df['Signal'] = np.where(df['MA50'] > df['MA200'], 1, -1)
-    return df
+    df['Buy_Price'] = np.nan
+    df['Sell_Price'] = np.nan
 
-# Function to calculate model accuracy
-def calculate_accuracy(df):
-    df = df.dropna()
-    X = df[['MA50', 'MA200', 'RSI', 'MACD', 'MACD_Signal', 'Stochastic']]
-    y = np.where(df['Close'].shift(-1) > df['Close'], 1, -1)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    return accuracy
+    for i in range(1, len(df)):
+        if df['Signal'].iloc[i] == 1 and df['Signal'].iloc[i - 1] == -1:
+            df['Buy_Price'].iloc[i] = df['Close'].iloc[i]
+        elif df['Signal'].iloc[i] == -1 and df['Signal'].iloc[i - 1] == 1:
+            df['Sell_Price'].iloc[i] = df['Close'].iloc[i]
+    return df
 
 # Fetch data
 data = fetch_data(tickers, asset_class)
@@ -143,10 +137,28 @@ for ticker in tickers:
         if df.empty:
             st.warning(f"Not enough data for {ticker} to perform analysis.")
             continue
-        df = generate_signal(df)
-        accuracy = calculate_accuracy(df)
-        st.write(f"Model Accuracy for {ticker}: {accuracy:.2%}")
-        st.write(f"Latest Combined Signal for {ticker}: {'Buy' if df['Signal'].iloc[-1] == 1 else 'Sell'}")
-        st.line_chart(df['Close'])
+        df = generate_signals(df)
+
+        # Display latest signals and prices
+        latest_signal = 'Buy' if df['Signal'].iloc[-1] == 1 else 'Sell'
+        latest_price = df['Close'].iloc[-1]
+        st.write(f"Latest Signal for {ticker}: **{latest_signal}**")
+        st.write(f"Latest Close Price for {ticker}: **{latest_price:.2f}**")
+
+        # Display Buy and Sell Prices
+        recent_trades = df[['Buy_Price', 'Sell_Price']].dropna(how='all').tail(5)
+        st.write("Recent Trade Signals:")
+        st.write(recent_trades)
+
+        # Plotting the Closing Price with Buy/Sell Signals
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(df.index, df['Close'], label='Close Price', color='blue')
+        ax.scatter(df.index, df['Buy_Price'], label='Buy Signal', marker='^', color='green')
+        ax.scatter(df.index, df['Sell_Price'], label='Sell Signal', marker='v', color='red')
+        ax.set_title(f"{ticker} Price Chart with Buy/Sell Signals")
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Price')
+        ax.legend()
+        st.pyplot(fig)
     else:
         st.warning(f"No data available for {ticker}.")
