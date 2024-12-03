@@ -38,7 +38,7 @@ elif section == "Forex":
     asset_class = 'Forex'
 elif section == "Indices":
     st.header("Global Indices Overview")
-    tickers = ['^GSPC', '^DJI', '^IXIC', '^N225', '^FTSE']  # S&P 500, Dow Jones, Nasdaq, Nikkei 225, FTSE 100
+    tickers = ['^GSPC', '^GDAXI', '^N225']  # S&P 500, DAX 40, Nikkei 225
     asset_class = 'Indices'
 
 # Function to fetch data from FMP
@@ -54,7 +54,12 @@ def fetch_data(tickers, asset_class):
                 df = pd.DataFrame(data_json)
                 df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
-                df = df.rename(columns={'close': 'Close', 'open': 'Open'})
+                df = df.rename(columns={
+                    'close': 'Close',
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low'
+                })
             else:
                 url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?apikey={api_key}'
                 response = requests.get(url)
@@ -63,7 +68,12 @@ def fetch_data(tickers, asset_class):
                 df = pd.DataFrame(data_json['historical'])
                 df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
-                df = df.rename(columns={'close': 'Close', 'open': 'Open'})
+                df = df.rename(columns={
+                    'close': 'Close',
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low'
+                })
             df = df.sort_index()
             data[ticker] = df
         except Exception as e:
