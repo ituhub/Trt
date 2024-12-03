@@ -7,9 +7,14 @@ import os
 import requests
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import time
 
 # Set page configuration
-st.set_page_config(page_title="Automated Trading Bot Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Automated Trading Bot Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # Retrieve API key
 api_key = os.getenv('FMP_API_KEY')
@@ -17,18 +22,26 @@ if not api_key:
     st.error("FMP API key not found. Please set it as an environment variable 'FMP_API_KEY'.")
     st.stop()
 
-# Initialize Demo Account
-initial_balance = 10000  # $10,000
-balance = initial_balance
-allocated_capital = {}  # Capital allocated per ticker
-open_positions = {}     # Track open positions per ticker
-trade_history = []      # List to store trade details
-balance_history = []    # Track balance over time
+# Initialize session state for balance and trades
+if 'initial_balance' not in st.session_state:
+    st.session_state.initial_balance = 10000  # $10,000
+if 'balance' not in st.session_state:
+    st.session_state.balance = st.session_state.initial_balance
+if 'allocated_capital' not in st.session_state:
+    st.session_state.allocated_capital = {}
+if 'open_positions' not in st.session_state:
+    st.session_state.open_positions = {}
+if 'trade_history' not in st.session_state:
+    st.session_state.trade_history = []
+if 'balance_history' not in st.session_state:
+    st.session_state.balance_history = []
+if 'last_update_time' not in st.session_state:
+    st.session_state.last_update_time = None
 
 # Title and description
-st.title("📈 Automated Trading Bot Dashboard")
+st.title("🚀 Automated Trading Bot Dashboard")
 st.markdown("""
-Welcome to the trading bot dashboard. This tool analyzes top-performing commodities, forex pairs, and indices to provide trading signals based on advanced strategies.
+Welcome to the professional trading bot dashboard. This tool analyzes top-performing commodities, forex pairs, and indices to provide trading signals and execute trades based on advanced strategies.
 """)
 
 # Sidebar navigation
@@ -51,26 +64,22 @@ elif section == "Indices":
 
 # Allocate capital per ticker
 num_tickers = len(tickers)
-capital_per_ticker = balance / num_tickers
+capital_per_ticker = st.session_state.balance / num_tickers
 
 # Initialize allocated capital and open positions
 for ticker in tickers:
-    allocated_capital[ticker] = capital_per_ticker
-    open_positions[ticker] = None  # None indicates no open position
+    if ticker not in st.session_state.allocated_capital:
+        st.session_state.allocated_capital[ticker] = capital_per_ticker
+    if ticker not in st.session_state.open_positions:
+        st.session_state.open_positions[ticker] = None  # None indicates no open position
 
 # Function to fetch live data from FMP
 def fetch_live_data(tickers, asset_class):
     data = {}
     for ticker in tickers:
         try:
-            if asset_class == 'Forex':
+            if asset_class in ['Forex', 'Commodities', 'Indices']:
                 # Fetch the latest intraday data (5-minute intervals)
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
-            elif asset_class == 'Commodities':
-                # Fetch the latest intraday data for commodities
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
-            elif asset_class == 'Indices':
-                # Fetch the latest intraday data for indices
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker}?apikey={api_key}'
             else:
                 # Default to daily data
@@ -99,23 +108,18 @@ def fetch_live_data(tickers, asset_class):
 # Functions to compute indicators
 def compute_indicators(df):
     df = df.copy()
-    df['MA50'] = df['Close'].rolling(window=10).mean()
-    df['MA200'] = df['Close'].rolling(window=30).mean()
+    df['MA_Short'] = df['Close'].rolling(window=10).mean()
+    df['MA_Long'] = df['Close'].rolling(window=30).mean()
     df['RSI'] = compute_RSI(df['Close'])
-    df['BB_Middle'] = df['Close'].rolling(window=20).mean()
-    df['BB_Std'] = df['Close'].rolling(window=20).std()
-    df['BB_Upper'] = df['BB_Middle'] + 2 * df['BB_Std']
-    df['BB_Lower'] = df['BB_Middle'] - 2 * df['BB_Std']
     df['MACD'], df['MACD_Signal'] = compute_MACD(df['Close'])
-    df['Stochastic'] = compute_stochastic(df)
     return df
 
 def compute_RSI(series, period=14):
-    delta = series.diff(1)
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, adjust=False).mean()
+    avg_loss = loss.ewm(com=period - 1, adjust=False).mean()
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
@@ -127,28 +131,22 @@ def compute_MACD(series):
     signal_line = macd.ewm(span=9, adjust=False).mean()
     return macd, signal_line
 
-def compute_stochastic(df, period=14):
-    lowest_low = df['Low'].rolling(window=period).min()
-    highest_high = df['High'].rolling(window=period).max()
-    stochastic = 100 * ((df['Close'] - lowest_low) / (highest_high - lowest_low))
-    return stochastic
-
 # Function to generate combined signal
 def generate_signals(df):
     df['Signal'] = 0
-    df['Signal'] = np.where(df['MA50'] > df['MA200'], 1, -1)
+    df.loc[df['MA_Short'] > df['MA_Long'], 'Signal'] = 1
+    df.loc[df['MA_Short'] < df['MA_Long'], 'Signal'] = -1
     return df
 
-# Function to simulate trades
+# Function to simulate trades live
 def simulate_trades_live(data):
-    global balance
     for ticker in tickers:
         if ticker in data:
             df = compute_indicators(data[ticker])
             df = df.dropna()
             df = generate_signals(df)
-            allocated = allocated_capital[ticker]
-            position = open_positions[ticker]
+            allocated = st.session_state.allocated_capital[ticker]
+            position = st.session_state.open_positions[ticker]
 
             # Only process the most recent data point
             current_time = df.index[-1]
@@ -166,19 +164,19 @@ def simulate_trades_live(data):
                         'Buy_Price': buy_price,
                         'Quantity': quantity
                     }
-                    open_positions[ticker] = position
+                    st.session_state.open_positions[ticker] = position
                     # Update balance
-                    balance -= allocated
-                    balance_history.append({'Time': current_time, 'Balance': balance})
-                    st.write(f"Bought {ticker} at {buy_price:.2f} on {current_time}")
+                    st.session_state.balance -= allocated
+                    st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
+                    st.success(f"✅ Bought {ticker} at ${buy_price:.2f} on {current_time}")
             else:
                 # Check if 10% profit achieved or sell signal
                 if price >= position['Buy_Price'] * 1.10 or signal == -1:
                     sell_price = price
                     profit = (sell_price - position['Buy_Price']) * position['Quantity']
-                    balance += allocated + profit
-                    balance_history.append({'Time': current_time, 'Balance': balance})
-                    trade_history.append({
+                    st.session_state.balance += allocated + profit
+                    st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
+                    st.session_state.trade_history.append({
                         'Ticker': ticker,
                         'Buy_Time': position['Buy_Time'],
                         'Buy_Price': position['Buy_Price'],
@@ -186,11 +184,10 @@ def simulate_trades_live(data):
                         'Sell_Price': sell_price,
                         'Profit/Loss': profit
                     })
-                    st.write(f"Sold {ticker} at {sell_price:.2f} on {current_time} | Profit: ${profit:.2f}")
-                    open_positions[ticker] = None
+                    st.success(f"✅ Sold {ticker} at ${sell_price:.2f} on {current_time} | Profit: ${profit:.2f}")
+                    st.session_state.open_positions[ticker] = None
         else:
             st.warning(f"No data available for {ticker}.")
-    return trade_history
 
 # Fetch live data
 data = fetch_live_data(tickers, asset_class)
@@ -200,7 +197,7 @@ if not data:
     st.stop()
 
 # Simulate trades on live data
-trade_history = simulate_trades_live(data)
+simulate_trades_live(data)
 
 # Main layout
 st.markdown("---")
@@ -209,13 +206,13 @@ col1, col2 = st.columns(2)
 # Display Account Overview
 with col1:
     st.header("💰 Account Overview")
-    st.metric("Initial Balance", f"${initial_balance:,.2f}")
-    st.metric("Current Balance", f"${balance:,.2f}")
-    if trade_history:
-        total_profit = sum([trade['Profit/Loss'] for trade in trade_history])
+    st.metric("Initial Balance", f"${st.session_state.initial_balance:,.2f}")
+    st.metric("Current Balance", f"${st.session_state.balance:,.2f}")
+    if st.session_state.trade_history:
+        total_profit = sum([trade['Profit/Loss'] for trade in st.session_state.trade_history])
         st.metric("Total Profit/Loss", f"${total_profit:,.2f}")
-        num_trades = len(trade_history)
-        winning_trades = sum(1 for trade in trade_history if trade['Profit/Loss'] > 0)
+        num_trades = len(st.session_state.trade_history)
+        winning_trades = sum(1 for trade in st.session_state.trade_history if trade['Profit/Loss'] > 0)
         win_rate = (winning_trades / num_trades) * 100
         st.metric("Total Trades", f"{num_trades}")
         st.metric("Winning Percentage", f"{win_rate:.2f}%")
@@ -227,8 +224,8 @@ with col1:
 # Display Account Balance Over Time
 with col2:
     st.header("📈 Account Balance Over Time")
-    if balance_history:
-        balance_df = pd.DataFrame(balance_history)
+    if st.session_state.balance_history:
+        balance_df = pd.DataFrame(st.session_state.balance_history)
         balance_df = balance_df.drop_duplicates(subset=['Time'])
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=balance_df['Time'], y=balance_df['Balance'], mode='lines', name='Balance'))
@@ -241,8 +238,8 @@ st.markdown("---")
 
 # Display Trade History
 st.header("📝 Trade History")
-if trade_history:
-    trades_df = pd.DataFrame(trade_history)
+if st.session_state.trade_history:
+    trades_df = pd.DataFrame(st.session_state.trade_history)
     trades_df['Buy_Time'] = trades_df['Buy_Time'].dt.strftime('%Y-%m-%d %H:%M')
     trades_df['Sell_Time'] = trades_df['Sell_Time'].dt.strftime('%Y-%m-%d %H:%M')
     trades_df['Profit/Loss'] = trades_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
@@ -255,9 +252,9 @@ st.markdown("---")
 
 # Display Open Positions
 st.header("📌 Current Open Positions")
-if any(position is not None for position in open_positions.values()):
+if any(position is not None for position in st.session_state.open_positions.values()):
     open_positions_list = []
-    for ticker, position in open_positions.items():
+    for ticker, position in st.session_state.open_positions.items():
         if position:
             current_price = data[ticker]['Close'][-1]
             profit_loss = (current_price - position['Buy_Price']) * position['Quantity']
@@ -286,8 +283,8 @@ for ticker in tickers:
         df = generate_signals(df)
 
         # Find buy and sell points from trade_history
-        trades = [trade for trade in trade_history if trade['Ticker'] == ticker]
-        position = open_positions[ticker]
+        trades = [trade for trade in st.session_state.trade_history if trade['Ticker'] == ticker]
+        position = st.session_state.open_positions[ticker]
 
         st.subheader(f"{ticker} Price Chart with Trade Signals")
 
@@ -304,10 +301,10 @@ for ticker in tickers:
             decreasing_line_color='red'
         ))
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['MA50'], line=dict(color='blue', width=1), name='MA50'
+            x=df.index, y=df['MA_Short'], line=dict(color='blue', width=1), name='MA Short'
         ))
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['MA200'], line=dict(color='orange', width=1), name='MA200'
+            x=df.index, y=df['MA_Long'], line=dict(color='orange', width=1), name='MA Long'
         ))
 
         # Add Buy/Sell markers
@@ -333,7 +330,13 @@ for ticker in tickers:
                 marker_symbol='star', marker_color='gold', marker_size=15, name='Open Position'
             ))
 
-        fig.update_layout(xaxis_title='Date', yaxis_title='Price ($)', height=500)
+        fig.update_layout(
+            xaxis_title='Date',
+            yaxis_title='Price ($)',
+            height=500,
+            margin=dict(l=0, r=0, t=30, b=0),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning(f"No data available for {ticker}.")
@@ -341,3 +344,7 @@ for ticker in tickers:
 # Footer
 st.markdown("---")
 st.markdown("<center>© 2023 Trading Bot Dashboard | Powered by Streamlit</center>", unsafe_allow_html=True)
+
+# Refresh data every 5 minutes
+if st.session_state.last_update_time is None or (datetime.now() - st.session_state.last_update_time).seconds > 300:
+    st.experimental_rerun()
