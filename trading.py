@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
+import plotly.graph_objects as go
 import os
 import requests
 from datetime import datetime, timedelta
-from sklearn.model_selection import cross_val_score
-from xgboost import XGBRegressor
 
 # Constants for symbols (for use elsewhere in your program)
 COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
@@ -14,12 +12,12 @@ FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
 CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
-# List of API endpoints
+# List of API endpoints with placeholders removed
 api_endpoints = {
-    "cryptocurrencies": "https://financialmodelingprep.com/api/v3/symbol/available-cryptocurrencies?apikey=YOUR_API_KEY",
-    "forex": "https://financialmodelingprep.com/api/v3/symbol/available-forex-currency-pairs?apikey=YOUR_API_KEY",
-    "indexes": "https://financialmodelingprep.com/api/v3/symbol/available-indexes?apikey=YOUR_API_KEY",
-    "commodities": "https://financialmodelingprep.com/api/v3/symbol/available-commodities?apikey=YOUR_API_KEY"
+    "cryptocurrencies": "https://financialmodelingprep.com/api/v3/symbol/available-cryptocurrencies",
+    "forex": "https://financialmodelingprep.com/api/v3/symbol/available-forex-currency-pairs",
+    "indexes": "https://financialmodelingprep.com/api/v3/symbol/available-indexes",
+    "commodities": "https://financialmodelingprep.com/api/v3/symbol/available-commodities"
 }
 
 # Function to fetch data from each endpoint
@@ -32,8 +30,8 @@ def fetch_data(endpoints):
 
     for key, url in endpoints.items():
         try:
-            # Replace placeholder with actual API key
-            full_url = url.replace("YOUR_API_KEY", api_key)
+            # Construct the full URL with the API key
+            full_url = f"{url}?apikey={api_key}"
             
             # Send the HTTP request
             response = requests.get(full_url, headers={"User-Agent": "MyApp/1.0"})
@@ -83,7 +81,7 @@ Welcome to the professional trading bot dashboard. This tool analyzes top-perfor
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices"])
+section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Crypto"])
 
 # Define tickers based on selection
 if section == "Forex":
@@ -97,7 +95,6 @@ elif section == "Commodities":
 elif section == "Indices":
     st.header("📊 Global Indices Overview")
     tickers = ['^GSPC', '^DJI', '^IXIC']  # S&P 500, Dow Jones, Nasdaq
-    asset_class = 'Indices'
 
 # Allocate capital per ticker
 num_tickers = len(tickers)
@@ -113,18 +110,15 @@ for ticker in tickers:
 # Function to fetch live data from FMP
 def fetch_live_data(tickers, asset_class):
     data = {}
+    api_key = os.getenv("FMP_API_KEY")
+
     for ticker in tickers:
         try:
-            # Replace '/' in forex tickers with empty string for API compatibility
             ticker_api = ticker.replace('/', '')
-            if asset_class == 'Forex' or asset_class == 'Commodities':
-                # Fetch intraday data at 5-minute intervals
+            if asset_class in ['Forex', 'Commodities']:
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
-            elif asset_class == 'Indices':
-                # For indices, use the daily historical endpoint
-                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
             else:
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
+                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
 
             response = requests.get(url)
             response.raise_for_status()
@@ -135,7 +129,6 @@ def fetch_live_data(tickers, asset_class):
                 continue
 
             if asset_class == 'Indices':
-                # For indices, data is under 'historical' key
                 df = pd.DataFrame(data_json.get('historical', []))
             else:
                 df = pd.DataFrame(data_json)
@@ -146,21 +139,19 @@ def fetch_live_data(tickers, asset_class):
 
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
-            df = df.rename(columns={
-                'close': 'Close',
-                'open': 'Open',
-                'high': 'High',
-                'low': 'Low'
-            })
+            df = df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'})
             df = df.sort_index()
-            # Filter data for the last 2 days for intraday data or last 30 days for daily data
+
+            # Filter data for the last 2 days for intraday or last 30 days for daily
             if asset_class == 'Indices':
                 df = df[df.index >= (datetime.utcnow() - timedelta(days=30))]
             else:
                 df = df[df.index >= (datetime.utcnow() - timedelta(days=2))]
+
             if df.empty:
                 st.warning(f"No recent data available for {ticker}.")
                 continue
+
             data[ticker] = df
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
@@ -170,11 +161,9 @@ def fetch_live_data(tickers, asset_class):
 def compute_indicators(df, asset_class):
     df = df.copy()
     if asset_class == 'Indices':
-        # Use longer windows for daily data
         df['MA_Short'] = df['Close'].rolling(window=5).mean()
         df['MA_Long'] = df['Close'].rolling(window=20).mean()
     else:
-        # Use shorter windows for intraday data
         df['MA_Short'] = df['Close'].rolling(window=10).mean()
         df['MA_Long'] = df['Close'].rolling(window=30).mean()
     df['RSI'] = compute_RSI(df['Close'])
@@ -211,9 +200,11 @@ def simulate_trades_live(data):
         if ticker in data:
             df = compute_indicators(data[ticker], asset_class)
             df = df.dropna()
+
             if df.empty:
                 st.warning(f"No data to process for {ticker}.")
                 continue
+            
             df = generate_signals(df)
             allocated = st.session_state.allocated_capital[ticker]
             position = st.session_state.open_positions[ticker]
