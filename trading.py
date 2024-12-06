@@ -7,10 +7,10 @@ import requests
 from datetime import datetime, timedelta
 
 # Constants for symbols (for use elsewhere in your program)
-COMMODITIES = ["XAUUSD", "XAGUSD", "NGF25", "KCZ24"]
-FOREX_SYMBOLS = ["EURUSD", "USDJPY", "GBPUSD", "AUDUSD"]
-CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD", "DOT/USD", "LTC/USD"]
-INDICES_SYMBOLS = ["^SPX", "^DAX", "^HSI", "^CSI300"]
+COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
+FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
+CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
+INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
 # List of API endpoints with placeholders removed
 api_endpoints = {
@@ -120,7 +120,7 @@ def fetch_live_data(tickers, asset_class):
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-            if asset_class in ['Forex', 'Commodities']:
+            if asset_class in ['Forex', 'Commodities', 'Indices', 'Crypto']:
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
             else:
                 url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
