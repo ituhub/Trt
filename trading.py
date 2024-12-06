@@ -86,15 +86,20 @@ section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indic
 # Define tickers based on selection
 if section == "Forex":
     st.header("💱 Top Forex Pairs")
-    tickers = ['EUR/USD', 'GBP/USD', 'USD/JPY']
+    tickers = FOREX_SYMBOLS  # Use the predefined constant
     asset_class = 'Forex'
 elif section == "Commodities":
     st.header("🌐 Top Commodities")
-    tickers = ['XAU/USD', 'XAG/USD']  # Gold and Silver
+    tickers = COMMODITIES  # Use the predefined constant
     asset_class = 'Commodities'
 elif section == "Indices":
     st.header("📊 Global Indices Overview")
-    tickers = ['^GSPC', '^DJI', '^IXIC']  # S&P 500, Dow Jones, Nasdaq
+    tickers = INDICES_SYMBOLS  # Use the predefined constant
+    asset_class = 'Indices'
+elif section == "Cryptocurrency":
+    st.header("💎 Top Cryptocurrencies")
+    tickers = CRYPTO_SYMBOLS  # Use the predefined constant
+    asset_class = 'Cryptocurrency'
 
 # Allocate capital per ticker
 num_tickers = len(tickers)
