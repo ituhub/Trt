@@ -7,10 +7,10 @@ import requests
 from datetime import datetime, timedelta
 
 # Constants for symbols (for use elsewhere in your program)
-COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
-FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
-CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
-INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
+COMMODITIES = ["XAUUSD", "XAGUSD", "NGF25", "KCZ24"]
+FOREX_SYMBOLS = ["EURUSD", "USDJPY", "GBPUSD", "AUDUSD"]
+CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD", "DOT/USD", "LTC/USD"]
+INDICES_SYMBOLS = ["^SPX", "^DAX", "^HSI", "^CSI300"]
 
 # List of API endpoints with placeholders removed
 api_endpoints = {
