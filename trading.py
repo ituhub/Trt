@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import os
 import requests
 from datetime import datetime, timedelta
-from prophet import Prophet  # <-- Added Prophet for advanced forecasting
+from prophet import Prophet  # Using Prophet for advanced forecasting
 
 # Set page configuration first as recommended by Streamlit
 st.set_page_config(
@@ -15,12 +15,12 @@ st.set_page_config(
 )
 
 # Constants for symbols
-COMMODITIES = ["GC=F", "SI=F", "NG=F", "CL=F"]
+COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
-CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "BCH-USD"]
+CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
-# List of API endpoints (if needed for reference or other uses)
+# List of API endpoints (if needed)
 api_endpoints = {
     "cryptocurrencies": "https://financialmodelingprep.com/api/v3/symbol/available-cryptocurrencies",
     "forex": "https://financialmodelingprep.com/api/v3/symbol/available-forex-currency-pairs",
@@ -82,7 +82,6 @@ if not tickers:
     st.error(f"No tickers defined for section: {section}")
     st.stop()
 
-# Debugging information (optional)
 st.write(f"Selected Asset Class: {asset_class}")
 st.write(f"Tickers: {tickers}")
 
@@ -159,7 +158,6 @@ def fetch_live_data(tickers, asset_class):
             st.warning(f"Failed to fetch data for {ticker}: {e}")
     return data
 
-# Indicator computation functions
 def compute_RSI(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -195,7 +193,6 @@ def generate_signals(df):
     df.loc[df['MA_Short'] < df['MA_Long'], 'Signal'] = -1
     return df
 
-# Function to simulate trades
 def simulate_trades_live(data):
     for ticker in tickers:
         if ticker in data:
@@ -343,55 +340,45 @@ else:
 st.markdown("---")
 
 ###################################################################
-# NEW SECTION: Advanced Forecasting for Predictions
+# Updated SECTION: Advanced Forecasting + TP/SL in Predictions
 ###################################################################
 st.header("📊 Signals and Predictions")
 
-# Function to forecast the next day's price using Prophet
-# We will forecast one day out from the latest available date in the DataFrame.
 def forecast_next_day_price(df):
-    # If there's not enough data, just return the last close
     if df.empty or len(df) < 10:
         return df['Close'][-1] if not df.empty else None
     
-    # Resample to daily (if not already daily) to avoid Prophet issues with too many points
-    # We'll take the last daily closing price per day
     df_daily = df.resample('D').last().dropna(subset=['Close'])
     if len(df_daily) < 10:
-        # Not enough daily data for a stable forecast, return last known price
         return df_daily['Close'][-1] if not df_daily.empty else None
     
-    # Prepare data for Prophet
     prophet_df = df_daily.reset_index()[['date','Close']]
     prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
     
-    # Initialize and fit the Prophet model
     m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
     m.fit(prophet_df)
     
-    # Create a dataframe for the future day (1 day ahead)
     future = m.make_future_dataframe(periods=1)
     forecast = m.predict(future)
-    
-    # Get the forecasted value for the next day
     predicted_price = forecast.iloc[-1]['yhat']
     return predicted_price
 
 def classify_signal(df, position_open):
-    # We now incorporate advanced forecasting. We'll predict the next day's price
-    # regardless of the signal, and then label actions accordingly.
     row = df.iloc[-1]
     signal = row['Signal']
     rsi = row['RSI']
     price = row['Close']
     
-    # Forecast next day's price
     predicted_price = forecast_next_day_price(df)
     if predicted_price is None:
         predicted_price = price  # fallback if forecast failed
 
-    signal_strength = {"Buy": "", "Sell": "", "Close": "", "Prediction": ""}
+    signal_strength = {"Buy": "", "Sell": "", "Close": "", "Prediction": "", "Take Profit": "", "Stop Loss": ""}
 
+    # Example logic for TP/SL:
+    # Buy scenario: TP at +5% of predicted, SL at -5% of current
+    # Sell scenario: no TP/SL recommended (or you can define)
+    # Neutral with position: TP at +3% of predicted, SL at -3% of current
     if signal == 1:
         # Bullish signal
         if rsi < 30:
@@ -400,8 +387,13 @@ def classify_signal(df, position_open):
             signal_strength["Buy"] = "Potential"
         signal_strength["Sell"] = ""
         signal_strength["Close"] = ""
-        # Use predicted price as forecasted next-day price
         signal_strength["Prediction"] = f"${predicted_price:.2f}"
+        
+        # Take Profit & Stop Loss for a Buy scenario
+        take_profit = predicted_price * 1.05
+        stop_loss = price * 0.95
+        signal_strength["Take Profit"] = f"${take_profit:.2f}"
+        signal_strength["Stop Loss"] = f"${stop_loss:.2f}"
         
     elif signal == -1:
         # Bearish signal
@@ -409,12 +401,15 @@ def classify_signal(df, position_open):
             signal_strength["Sell"] = "Strong"
         else:
             signal_strength["Sell"] = "Potential"
-        # If we hold a position, consider closing it
         if position_open:
             signal_strength["Close"] = "Close Position"
         else:
             signal_strength["Close"] = ""
         signal_strength["Prediction"] = f"${predicted_price:.2f}"
+        
+        # For a Sell scenario, we might leave TP/SL blank (or define your own logic)
+        signal_strength["Take Profit"] = ""
+        signal_strength["Stop Loss"] = ""
         
     else:
         # Neutral signal
@@ -422,8 +417,16 @@ def classify_signal(df, position_open):
         signal_strength["Sell"] = ""
         if position_open:
             signal_strength["Close"] = "Consider Close"
+            
+            # TP/SL for neutral if holding position: +3%/-3%
+            take_profit = predicted_price * 1.03
+            stop_loss = price * 0.97
+            signal_strength["Take Profit"] = f"${take_profit:.2f}"
+            signal_strength["Stop Loss"] = f"${stop_loss:.2f}"
         else:
             signal_strength["Close"] = ""
+            signal_strength["Take Profit"] = ""
+            signal_strength["Stop Loss"] = ""
         signal_strength["Prediction"] = f"${predicted_price:.2f}"
         
     return signal_strength
@@ -443,7 +446,9 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close"],
-            "Prediction": classification["Prediction"]
+            "Prediction": classification["Prediction"],
+            "Take Profit": classification["Take Profit"],
+            "Stop Loss": classification["Stop Loss"]
         })
 
 if signals_list:
@@ -453,7 +458,7 @@ else:
     st.info("No signals available to display.")
 
 ###################################################################
-# END OF NEW SECTION
+# END OF UPDATED SECTION
 ###################################################################
 
 st.markdown("---")
