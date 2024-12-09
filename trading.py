@@ -6,17 +6,11 @@ import os
 import requests
 from datetime import datetime, timedelta
 
-# Set page configuration as the first Streamlit command
+# Set page configuration first as recommended by Streamlit
 st.set_page_config(
     page_title="Automated Trading Bot Dashboard",
-    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': 'https://www.extremelycoolapp.com/help',
-        'Report a bug': "https://www.extremelycoolapp.com/bug",
-        'About': "# This is an *automated trading bot dashboard*!"
-    }
 )
 
 # Constants for symbols
@@ -25,7 +19,7 @@ FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
 CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
-# API endpoints
+# List of API endpoints (if needed for reference or other uses)
 api_endpoints = {
     "cryptocurrencies": "https://financialmodelingprep.com/api/v3/symbol/available-cryptocurrencies",
     "forex": "https://financialmodelingprep.com/api/v3/symbol/available-forex-currency-pairs",
@@ -33,43 +27,9 @@ api_endpoints = {
     "commodities": "https://financialmodelingprep.com/api/v3/symbol/available-commodities"
 }
 
-# Function to fetch data from each endpoint
-def fetch_data(endpoints):
-    data = {}
-    api_key = os.getenv("FMP_API_KEY")
-
-    if not api_key:
-        st.error("API key not found. Set 'FMP_API_KEY' in your environment variables.")
-        return data
-
-    for key, url in endpoints.items():
-        try:
-            full_url = f"{url}?apikey={api_key}"
-            response = requests.get(full_url, headers={"User-Agent": "MyApp/1.0"})
-            response.raise_for_status()
-            data[key] = response.json()
-        except requests.RequestException as e:
-            st.warning(f"Error fetching data from {key}: {e}")
-            data[key] = None
-
-    return data
-
-# Fetch data from all endpoints
-if __name__ == "__main__":
-    fetched_data = fetch_data(api_endpoints)
-    for key, value in fetched_data.items():
-        st.write(f"\n{key.upper()}:\n{value}")
-
-# Set page configuration
-st.set_page_config(
-    page_title="Automated Trading Bot Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 # Initialize session state for balance and trades
 if 'initial_balance' not in st.session_state:
-    st.session_state.initial_balance = 10000
+    st.session_state.initial_balance = 10000  # $10,000
 if 'balance' not in st.session_state:
     st.session_state.balance = st.session_state.initial_balance
 if 'allocated_capital' not in st.session_state:
@@ -84,14 +44,14 @@ if 'balance_history' not in st.session_state:
 # Title and description
 st.title("🚀 Automated Trading Bot Dashboard")
 st.markdown("""
-Welcome to the professional trading bot dashboard. This tool analyzes top-performing commodities, forex pairs, and indices to provide trading signals and execute trades based on advanced strategies.
+Welcome to the professional trading bot dashboard. This tool analyzes top-performing commodities, forex pairs, indices, and cryptocurrencies to provide trading signals and execute trades based on advanced strategies.
 """)
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-section = st.sidebar.selectbox("Select Asset Class", ["Forex", "Commodities", "Indices", "Cryptocurrency"])
+section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Cryptocurrency"])
 
-# Initialize tickers and asset_class
+# Initialize tickers and asset_class to avoid reference errors
 tickers = []
 asset_class = None
 
@@ -116,12 +76,12 @@ else:
     st.error("Invalid section selected.")
     st.stop()
 
-# Validate tickers
+# Validate the contents of tickers
 if not tickers:
     st.error(f"No tickers defined for section: {section}")
     st.stop()
 
-# Debugging information
+# Debugging information (optional)
 st.write(f"Selected Asset Class: {asset_class}")
 st.write(f"Tickers: {tickers}")
 
@@ -134,17 +94,29 @@ for ticker in tickers:
     if ticker not in st.session_state.allocated_capital:
         st.session_state.allocated_capital[ticker] = capital_per_ticker
     if ticker not in st.session_state.open_positions:
-        st.session_state.open_positions[ticker] = None
+        st.session_state.open_positions[ticker] = None  # None indicates no open position
 
 # Function to fetch live data from FMP
 def fetch_live_data(tickers, asset_class):
     data = {}
     api_key = os.getenv("FMP_API_KEY")
 
+    if not api_key:
+        st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
+        return data
+
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-            url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}' if asset_class in ['Forex', 'Commodities', 'Indices', 'Crypto'] else f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
+
+            # Different endpoints based on asset_class
+            if asset_class == 'Indices':
+                # Indices: Use historical-price-full (daily data)
+                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
+            else:
+                # Forex, Commodities, Cryptocurrency: Use 5-minute historical data
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
+
             response = requests.get(url)
             response.raise_for_status()
             data_json = response.json()
@@ -153,7 +125,12 @@ def fetch_live_data(tickers, asset_class):
                 st.warning(f"No data returned for {ticker}.")
                 continue
 
-            df = pd.DataFrame(data_json.get('historical', [])) if asset_class == 'Indices' else pd.DataFrame(data_json)
+            if asset_class == 'Indices':
+                # For indices, data is under 'historical'
+                df = pd.DataFrame(data_json.get('historical', []))
+            else:
+                # For others, the data is a direct list
+                df = pd.DataFrame(data_json)
 
             if df.empty:
                 st.warning(f"No data available for {ticker}.")
@@ -164,8 +141,13 @@ def fetch_live_data(tickers, asset_class):
             df = df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'})
             df = df.sort_index()
 
-            # Filter data for the last 2 days for intraday or last 30 days for daily
-            df = df[df.index >= (datetime.utcnow() - timedelta(days=30 if asset_class == 'Indices' else 2))]
+            # Filter data for recent timeframe
+            if asset_class == 'Indices':
+                # Last 30 days for Indices
+                df = df[df.index >= (datetime.utcnow() - timedelta(days=30))]
+            else:
+                # Last 2 days for other asset classes
+                df = df[df.index >= (datetime.utcnow() - timedelta(days=2))]
 
             if df.empty:
                 st.warning(f"No recent data available for {ticker}.")
@@ -176,19 +158,7 @@ def fetch_live_data(tickers, asset_class):
             st.warning(f"Failed to fetch data for {ticker}: {e}")
     return data
 
-# Functions to compute indicators
-def compute_indicators(df, asset_class):
-    df = df.copy()
-    if asset_class == 'Indices':
-        df['MA_Short'] = df['Close'].rolling(window=5).mean()
-        df['MA_Long'] = df['Close'].rolling(window=20).mean()
-    else:
-        df['MA_Short'] = df['Close'].rolling(window=10).mean()
-        df['MA_Long'] = df['Close'].rolling(window=30).mean()
-    df['RSI'] = compute_RSI(df['Close'])
-    df['MACD'], df['MACD_Signal'] = compute_MACD(df['Close'])
-    return df
-
+# Indicator computation functions
 def compute_RSI(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -206,14 +176,25 @@ def compute_MACD(series):
     signal_line = macd.ewm(span=9, adjust=False).mean()
     return macd, signal_line
 
-# Function to generate combined signal
+def compute_indicators(df, asset_class):
+    df = df.copy()
+    if asset_class == 'Indices':
+        df['MA_Short'] = df['Close'].rolling(window=5).mean()
+        df['MA_Long'] = df['Close'].rolling(window=20).mean()
+    else:
+        df['MA_Short'] = df['Close'].rolling(window=10).mean()
+        df['MA_Long'] = df['Close'].rolling(window=30).mean()
+    df['RSI'] = compute_RSI(df['Close'])
+    df['MACD'], df['MACD_Signal'] = compute_MACD(df['Close'])
+    return df
+
 def generate_signals(df):
     df['Signal'] = 0
     df.loc[df['MA_Short'] > df['MA_Long'], 'Signal'] = 1
     df.loc[df['MA_Short'] < df['MA_Long'], 'Signal'] = -1
     return df
 
-# Function to simulate trades live
+# Function to simulate trades
 def simulate_trades_live(data):
     for ticker in tickers:
         if ticker in data:
@@ -228,7 +209,7 @@ def simulate_trades_live(data):
             allocated = st.session_state.allocated_capital[ticker]
             position = st.session_state.open_positions[ticker]
 
-            # Only process the most recent data point
+            # Process the most recent data point
             current_time = df.index[-1]
             row = df.iloc[-1]
             signal = row['Signal']
@@ -250,7 +231,7 @@ def simulate_trades_live(data):
                     st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
                     st.success(f"✅ Bought {ticker} at ${buy_price:.2f} on {current_time}")
             else:
-                # Check if 10% profit achieved or sell signal
+                # Check if 10% profit or sell signal
                 if price >= position['Buy_Price'] * 1.10 or signal == -1:
                     sell_price = price
                     profit = (sell_price - position['Buy_Price']) * position['Quantity']
@@ -270,24 +251,6 @@ def simulate_trades_live(data):
             st.warning(f"No data available for {ticker}.")
     return
 
-# Function to generate strong signals and prediction prices
-def generate_prediction_signals(data):
-    predictions = []
-    for ticker in data.keys():
-        df = compute_indicators(data[ticker], asset_class)
-        if df.empty:
-            continue
-        latest_data = df.iloc[-1]
-        signal = latest_data['Signal']
-        prediction_price = latest_data['Close'] * (1.01 if signal == 1 else 0.99)  # Simple prediction logic
-        predictions.append({
-            'Symbol': ticker,
-            'Buy/Sell': 'Buy' if signal == 1 else 'Sell' if signal == -1 else 'Hold',
-            'Close Position At': prediction_price,
-            'Prediction': prediction_price
-        })
-    return pd.DataFrame(predictions)
-
 # Fetch live data
 data = fetch_live_data(tickers, asset_class)
 
@@ -297,9 +260,6 @@ if not data:
 
 # Simulate trades on live data
 simulate_trades_live(data)
-
-# Generate signals and predictions
-predictions_df = generate_prediction_signals(data)
 
 # Main layout
 st.markdown("---")
@@ -323,14 +283,20 @@ with col1:
         st.metric("Total Trades", "0")
         st.metric("Winning Percentage", "0.00%")
 
-# Display Predictions Table
-st.header("📊 Trading Signals and Predictions")
-if not predictions_df.empty:
-    predictions_df["Close Position At"] = predictions_df["Close Position At"].apply(lambda x: f"${x:.2f}")
-    predictions_df["Prediction"] = predictions_df["Prediction"].apply(lambda x: f"${x:.2f}")
-    st.table(predictions_df)
-else:
-    st.info("No strong signals available.")
+# Display Account Balance Over Time
+with col2:
+    st.header("📈 Account Balance Over Time")
+    if st.session_state.balance_history:
+        balance_df = pd.DataFrame(st.session_state.balance_history)
+        balance_df = balance_df.drop_duplicates(subset=['Time'])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=balance_df['Time'], y=balance_df['Balance'], mode='lines', name='Balance'))
+        fig.update_layout(xaxis_title='Time', yaxis_title='Balance ($)', height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No account activity to display.")
+
+st.markdown("---")
 
 # Display Trade History
 st.header("📝 Trade History")
@@ -375,7 +341,7 @@ else:
 
 st.markdown("---")
 
-# Display Trade Signals and Prices per Ticker
+# Display Trade Signals and Price Charts
 st.header("🔍 Trade Signals and Price Charts")
 
 for ticker in tickers:
@@ -386,6 +352,12 @@ for ticker in tickers:
             st.warning(f"No data to display for {ticker}.")
             continue
         df = generate_signals(df)
+
+        # Find buy and sell points from trade_history
+        trades = [trade for trade in st.session_state.trade_history if trade['Ticker'] == ticker]
+        position = st.session_state.open_positions[ticker]
+
+        st.subheader(f"{ticker} Price Chart with Trade Signals")
 
         # Prepare data for plotting
         fig = go.Figure()
@@ -407,9 +379,6 @@ for ticker in tickers:
         ))
 
         # Add Buy/Sell markers
-        trades = [trade for trade in st.session_state.trade_history if trade['Ticker'] == ticker]
-        position = st.session_state.open_positions[ticker]
-
         if trades:
             buy_times = [pd.to_datetime(trade['Buy_Time']) for trade in trades]
             buy_prices = [trade['Buy_Price'] for trade in trades]
@@ -445,4 +414,4 @@ for ticker in tickers:
 
 # Footer
 st.markdown("---")
-st.markdown("<center>© 2023 Trading Bot Dashboard | Powered by Streamlit</center>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;'>© 2023 Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
