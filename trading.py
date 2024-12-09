@@ -20,6 +20,31 @@ api_endpoints = {
     "commodities": "https://financialmodelingprep.com/api/v3/symbol/available-commodities"
 }
 
+def get_data(symbol, start_date, end_date):
+    """Fetch historical data for a given symbol."""
+    api_key = os.getenv("FMP_API_KEY")  # Fetch the API key from environment variables
+    if not api_key:
+        st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
+        return pd.DataFrame()  # Return empty DataFrame if API key is missing
+
+    # Construct the URL for historical data
+    url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{symbol}?from={start_date}&to={end_date}&apikey={api_key}"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an error for bad HTTP responses
+        data = response.json()
+        
+        # Check if 'historical' data exists
+        if 'historical' in data:
+            return pd.DataFrame(data['historical'])  # Convert to DataFrame
+        else:
+            st.error(f"No historical data found for {symbol}.")
+            return pd.DataFrame()  # Return empty DataFrame if no data found
+    except Exception as e:
+        st.error(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()  # Return empty DataFrame on error
+
 # Function to fetch data from each endpoint
 def fetch_data(endpoints):
     data = {}
@@ -81,7 +106,11 @@ Welcome to the professional trading bot dashboard. This tool analyzes top-perfor
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Crypto"])
+section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Cryptocurrency"])
+
+# Initialize tickers and asset_class to avoid reference errors
+tickers = []
+asset_class = None
 
 # Define tickers based on selection
 if section == "Forex":
@@ -100,6 +129,18 @@ elif section == "Cryptocurrency":
     st.header("💎 Top Cryptocurrencies")
     tickers = CRYPTO_SYMBOLS  # Use the predefined constant
     asset_class = 'Cryptocurrency'
+else:
+    st.error("Invalid section selected.")
+    st.stop()
+
+# Validate the contents of tickers
+if not tickers:
+    st.error(f"No tickers defined for section: {section}")
+    st.stop()
+
+# Debugging information (optional)
+st.write(f"Selected Asset Class: {asset_class}")
+st.write(f"Tickers: {tickers}")
 
 # Allocate capital per ticker
 num_tickers = len(tickers)
