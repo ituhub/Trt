@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import os
 import requests
 from datetime import datetime, timedelta
+from prophet import Prophet  # <-- Added Prophet for advanced forecasting
 
 # Set page configuration first as recommended by Streamlit
 st.set_page_config(
@@ -342,54 +343,88 @@ else:
 st.markdown("---")
 
 ###################################################################
-# NEW SECTION: Table of Strong and Potential Signals with Prediction
+# NEW SECTION: Advanced Forecasting for Predictions
 ###################################################################
 st.header("📊 Signals and Predictions")
 
-# Function to determine signal strength and prediction
-def classify_signal(row, position_open):
-    signal_strength = {"Buy": "", "Sell": "", "Close": "", "Prediction": ""}
+# Function to forecast the next day's price using Prophet
+# We will forecast one day out from the latest available date in the DataFrame.
+def forecast_next_day_price(df):
+    # If there's not enough data, just return the last close
+    if df.empty or len(df) < 10:
+        return df['Close'][-1] if not df.empty else None
+    
+    # Resample to daily (if not already daily) to avoid Prophet issues with too many points
+    # We'll take the last daily closing price per day
+    df_daily = df.resample('D').last().dropna(subset=['Close'])
+    if len(df_daily) < 10:
+        # Not enough daily data for a stable forecast, return last known price
+        return df_daily['Close'][-1] if not df_daily.empty else None
+    
+    # Prepare data for Prophet
+    prophet_df = df_daily.reset_index()[['date','Close']]
+    prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
+    
+    # Initialize and fit the Prophet model
+    m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
+    m.fit(prophet_df)
+    
+    # Create a dataframe for the future day (1 day ahead)
+    future = m.make_future_dataframe(periods=1)
+    forecast = m.predict(future)
+    
+    # Get the forecasted value for the next day
+    predicted_price = forecast.iloc[-1]['yhat']
+    return predicted_price
+
+def classify_signal(df, position_open):
+    # We now incorporate advanced forecasting. We'll predict the next day's price
+    # regardless of the signal, and then label actions accordingly.
+    row = df.iloc[-1]
     signal = row['Signal']
     rsi = row['RSI']
     price = row['Close']
     
-    # Basic logic:
-    # If signal = 1 (Bullish), check RSI for strong buy condition
+    # Forecast next day's price
+    predicted_price = forecast_next_day_price(df)
+    if predicted_price is None:
+        predicted_price = price  # fallback if forecast failed
+
+    signal_strength = {"Buy": "", "Sell": "", "Close": "", "Prediction": ""}
+
     if signal == 1:
+        # Bullish signal
         if rsi < 30:
             signal_strength["Buy"] = "Strong"
         else:
             signal_strength["Buy"] = "Potential"
-        # No immediate sell or close
         signal_strength["Sell"] = ""
         signal_strength["Close"] = ""
-        # Prediction: If buy signal, predict slight increase
-        signal_strength["Prediction"] = f"${(price * 1.01):.2f}"
+        # Use predicted price as forecasted next-day price
+        signal_strength["Prediction"] = f"${predicted_price:.2f}"
         
     elif signal == -1:
+        # Bearish signal
         if rsi > 70:
             signal_strength["Sell"] = "Strong"
         else:
             signal_strength["Sell"] = "Potential"
-        # If we currently hold a position, close it
+        # If we hold a position, consider closing it
         if position_open:
             signal_strength["Close"] = "Close Position"
         else:
             signal_strength["Close"] = ""
-        # Prediction: If sell signal, predict slight decrease
-        signal_strength["Prediction"] = f"${(price * 0.99):.2f}"
+        signal_strength["Prediction"] = f"${predicted_price:.2f}"
         
     else:
-        # No signal, no buy/sell
+        # Neutral signal
         signal_strength["Buy"] = ""
         signal_strength["Sell"] = ""
         if position_open:
-            # Possibly hold or consider closing
             signal_strength["Close"] = "Consider Close"
         else:
             signal_strength["Close"] = ""
-        # Prediction: If neutral, no price change predicted
-        signal_strength["Prediction"] = f"${price:.2f}"
+        signal_strength["Prediction"] = f"${predicted_price:.2f}"
         
     return signal_strength
 
@@ -401,9 +436,8 @@ for ticker in tickers:
         if df.empty:
             continue
         df = generate_signals(df)
-        latest_row = df.iloc[-1]
         position_open = st.session_state.open_positions[ticker] is not None
-        classification = classify_signal(latest_row, position_open)
+        classification = classify_signal(df, position_open)
         signals_list.append({
             "Symbol": ticker,
             "Buy": classification["Buy"],
