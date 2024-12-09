@@ -5,7 +5,8 @@ import plotly.graph_objects as go
 import os
 import requests
 from datetime import datetime, timedelta
-from prophet import Prophet  # Using Prophet for advanced forecasting
+from prophet import Prophet
+from sklearn.metrics import mean_absolute_error
 
 # Set page configuration first as recommended by Streamlit
 st.set_page_config(
@@ -15,18 +16,10 @@ st.set_page_config(
 )
 
 # Constants for symbols
-COMMODITIES = ["GC=F", "SI=F", "NG=F"]
+COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
 CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "BCH-USD"]
-INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI"]
-
-# API endpoints if needed (not currently used)
-api_endpoints = {
-    "cryptocurrencies": "https://financialmodelingprep.com/api/v3/symbol/available-cryptocurrencies",
-    "forex": "https://financialmodelingprep.com/api/v3/symbol/available-forex-currency-pairs",
-    "indexes": "https://financialmodelingprep.com/api/v3/symbol/available-indexes",
-    "commodities": "https://financialmodelingprep.com/api/v3/symbol/available-commodities"
-}
+INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
 # Initialize session state for balance and trades
 if 'initial_balance' not in st.session_state:
@@ -43,20 +36,22 @@ if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
 
 # Title and description
-st.title("🚀 Automated Trading Bot Dashboard")
+st.title("🚀 Advanced Automated Trading Bot Dashboard")
 st.markdown("""
-Welcome to the professional trading bot dashboard. This tool analyzes top-performing commodities, forex pairs, indices, and cryptocurrencies to provide trading signals and execute trades based on advanced strategies.
+Welcome to the enhanced trading bot dashboard. This version includes:
+- More advanced forecasting using Prophet with a simple model evaluation step.
+- Dynamically adjusted stop loss and take profit levels based on volatility.
+- Multiple day-ahead predictions for improved decision-making.
 """)
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
 section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Cryptocurrency"])
 
-# Initialize tickers and asset_class to avoid reference errors
+# Initialize tickers and asset_class
 tickers = []
 asset_class = None
 
-# Define tickers based on selection
 if section == "Forex":
     st.header("💱 Top Forex Pairs")
     tickers = FOREX_SYMBOLS
@@ -77,7 +72,6 @@ else:
     st.error("Invalid section selected.")
     st.stop()
 
-# Validate tickers
 if not tickers:
     st.error(f"No tickers defined for section: {section}")
     st.stop()
@@ -85,30 +79,26 @@ if not tickers:
 st.write(f"Selected Asset Class: {asset_class}")
 st.write(f"Tickers: {tickers}")
 
-# Allocate capital per ticker
 num_tickers = len(tickers)
 capital_per_ticker = st.session_state.balance / num_tickers
 
-# Initialize allocated capital and open positions
 for ticker in tickers:
     if ticker not in st.session_state.allocated_capital:
         st.session_state.allocated_capital[ticker] = capital_per_ticker
     if ticker not in st.session_state.open_positions:
-        st.session_state.open_positions[ticker] = None  # None means no open position
+        st.session_state.open_positions[ticker] = None
 
 def fetch_live_data(tickers, asset_class):
     data = {}
     api_key = os.getenv("FMP_API_KEY")
 
     if not api_key:
-        st.error("API key not found. Set 'FMP_API_KEY'.")
+        st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
         return data
 
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-
-            # Different endpoints based on asset_class
             if asset_class == 'Indices':
                 url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
             else:
@@ -189,7 +179,7 @@ def simulate_trades_live(data):
     for ticker in tickers:
         if ticker in data:
             df = compute_indicators(data[ticker], asset_class)
-            df = df.dropna()
+            df.dropna(inplace=True)
 
             if df.empty:
                 st.warning(f"No data for {ticker}.")
@@ -206,7 +196,6 @@ def simulate_trades_live(data):
 
             if position is None:
                 if signal == 1:
-                    # Execute Buy
                     quantity = allocated / price
                     buy_price = price
                     position = {
@@ -239,14 +228,11 @@ def simulate_trades_live(data):
             st.warning(f"No data for {ticker}.")
     return
 
-# Fetch live data
 data = fetch_live_data(tickers, asset_class)
-
 if not data:
-    st.error("No data fetched. Check tickers and API.")
+    st.error("No data fetched.")
     st.stop()
 
-# Simulate trades
 simulate_trades_live(data)
 
 st.markdown("---")
@@ -261,7 +247,7 @@ with col1:
         st.metric("Total Profit/Loss", f"${total_profit:,.2f}")
         num_trades = len(st.session_state.trade_history)
         winning_trades = sum(1 for trade in st.session_state.trade_history if trade['Profit/Loss'] > 0)
-        win_rate = (winning_trades / num_trades) * 100
+        win_rate = (winning_trades / num_trades) * 100 if num_trades > 0 else 0
         st.metric("Total Trades", f"{num_trades}")
         st.metric("Winning Percentage", f"{win_rate:.2f}%")
     else:
@@ -308,8 +294,6 @@ if any(position is not None for position in st.session_state.open_positions.valu
                     'Current_Price': current_price,
                     'Profit/Loss': profit_loss
                 })
-            else:
-                st.warning(f"No current price data available for {ticker}.")
     if open_positions_list:
         open_positions_df = pd.DataFrame(open_positions_list)
         open_positions_df['Profit/Loss'] = open_positions_df['Profit/Loss'].apply(lambda x: f"${x:,.2f}")
@@ -322,94 +306,133 @@ else:
 st.markdown("---")
 
 #############################################
-# Adjusted SECTION: Advanced Forecasting + Revised TP/SL
+# ADVANCED FORECASTING, MODEL EVALUATION, MULTI-DAY PREDICTIONS, DYNAMIC TP/SL
 #############################################
-st.header("📊 Signals and Predictions")
+st.header("📊 Signals, Predictions, and Model Evaluation")
 
-def forecast_next_day_price(df):
-    if df.empty or len(df) < 10:
-        return df['Close'][-1] if not df.empty else None
-    
+def forecast_next_days(df, days=3):
+    # Return next 'days' predictions along with model evaluation
+    if df.empty or len(df) < 30:  # Need enough data for meaningful split
+        return None, None, None, None
+
+    # Convert to daily
     df_daily = df.resample('D').last().dropna(subset=['Close'])
-    if len(df_daily) < 10:
-        return df_daily['Close'][-1] if not df_daily.empty else None
+    if len(df_daily) < 30:
+        return None, None, None, None
     
     prophet_df = df_daily.reset_index()[['date','Close']]
     prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
-    
-    m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=False)
-    m.fit(prophet_df)
-    
-    future = m.make_future_dataframe(periods=1)
-    forecast = m.predict(future)
-    predicted_price = forecast.iloc[-1]['yhat']
-    return predicted_price
+
+    # Train/test split: last 7 days as test
+    train_size = len(prophet_df) - 7
+    train_df = prophet_df.iloc[:train_size]
+    test_df = prophet_df.iloc[train_size:]
+
+    m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=True)
+    m.fit(train_df)
+
+    # Forecast on test
+    future_test = m.make_future_dataframe(periods=7)
+    forecast_test = m.predict(future_test)
+    # Evaluate model on test set (last 7 days)
+    test_forecast = forecast_test.set_index('ds').loc[test_df['ds']]
+    mae = mean_absolute_error(test_df['y'], test_forecast['yhat'])
+    mape = np.mean(np.abs((test_df['y'] - test_forecast['yhat']) / test_df['y'])) * 100
+
+    # Now forecast for desired days
+    future = m.make_future_dataframe(periods=days)
+    final_forecast = m.predict(future)
+    predicted_prices = final_forecast.tail(days)[['ds', 'yhat']]
+
+    return predicted_prices, mae, mape, prophet_df['y'].iloc[-1]
 
 def classify_signal(df, position_open):
-    row = df.iloc[-1]
-    signal = row['Signal']
-    rsi = row['RSI']
-    price = row['Close']
-    
-    predicted_price = forecast_next_day_price(df)
-    if predicted_price is None:
-        predicted_price = price  # fallback
-    
+    # Compute volatility as std of last 20 daily closes
+    df_daily = df.resample('D').last().dropna(subset=['Close'])
+    if len(df_daily) < 20:
+        volatility = df_daily['Close'].std() if not df_daily.empty else 1
+    else:
+        volatility = df_daily['Close'].tail(20).std()
+
+    predictions, mae, mape, last_close = forecast_next_days(df)
+    if predictions is None:
+        # fallback if no predictions
+        return {
+            "Buy": "",
+            "Sell": "",
+            "Close": "",
+            "Prediction_Day1": "N/A",
+            "Prediction_Day2": "N/A",
+            "Prediction_Day3": "N/A",
+            "Take Profit": "",
+            "Stop Loss": "",
+            "MAE": "N/A",
+            "MAPE": "N/A"
+        }
+
+    # Predictions for next 3 days
+    day_preds = predictions['yhat'].values
+    # Use day 1 prediction for immediate guidance
+    predicted_price = day_preds[0]
+
+    # Decide signal based on last known signal
+    last_row = df.iloc[-1]
+    signal = last_row['Signal']
+    rsi = last_row['RSI']
+    price = last_row['Close']
+
     signal_strength = {
         "Buy": "",
         "Sell": "",
         "Close": "",
-        "Prediction": f"${predicted_price:.2f}",
+        "Prediction_Day1": f"${day_preds[0]:.2f}",
+        "Prediction_Day2": f"${day_preds[1]:.2f}" if len(day_preds) > 1 else "N/A",
+        "Prediction_Day3": f"${day_preds[2]:.2f}" if len(day_preds) > 2 else "N/A",
+        "MAE": f"{mae:.2f}",
+        "MAPE": f"{mape:.2f}%",
         "Take Profit": "",
         "Stop Loss": ""
     }
 
-    # Define small, closer increments around the predicted price
-    # For Buy: TP at predicted_price *1.02, SL at predicted_price*0.98
-    # For Sell: TP at predicted_price *0.98, SL at predicted_price*1.02 (since we profit if price goes down)
-    # For Neutral with position: narrower band around predicted price, e.g. ±1%
+    # Set TP and SL based on volatility: 
+    # For buy signal: TP = predicted_price + volatility, SL = predicted_price - volatility
+    # Adjust for signal direction; For sell, TP < predicted price, etc.
+    # You can tweak these multipliers as desired.
+    tp_factor = 1.0  # 1x volatility for demonstration
+    sl_factor = 1.0
 
-    if signal == 1:
-        # Bullish
+    if signal == 1:  # Bullish
         if rsi < 30:
             signal_strength["Buy"] = "Strong"
         else:
             signal_strength["Buy"] = "Potential"
-        # Set TP & SL around predicted price
-        tp = predicted_price * 1.02
-        sl = predicted_price * 0.98
+        # TP above predicted
+        tp = predicted_price + (volatility * tp_factor)
+        sl = predicted_price - (volatility * sl_factor)
         signal_strength["Take Profit"] = f"${tp:.2f}"
         signal_strength["Stop Loss"] = f"${sl:.2f}"
 
-    elif signal == -1:
-        # Bearish
+    elif signal == -1:  # Bearish
         if rsi > 70:
             signal_strength["Sell"] = "Strong"
         else:
             signal_strength["Sell"] = "Potential"
         if position_open:
             signal_strength["Close"] = "Close Position"
-        # For a sell, TP if price goes down (predicted_price *0.98), SL if price goes up (predicted_price*1.02)
-        tp = predicted_price * 0.98
-        sl = predicted_price * 1.02
+        # For sell, we want price to go down, so TP below predicted_price, SL above
+        tp = predicted_price - (volatility * tp_factor)
+        sl = predicted_price + (volatility * sl_factor)
         signal_strength["Take Profit"] = f"${tp:.2f}"
         signal_strength["Stop Loss"] = f"${sl:.2f}"
 
-    else:
-        # Neutral
+    else:  # Neutral
         if position_open:
             signal_strength["Close"] = "Consider Close"
-            # Narrow band around predicted price ±1%
-            tp = predicted_price * 1.01
-            sl = predicted_price * 0.99
+            # Narrow band around predicted price for neutral
+            tp = predicted_price + (volatility * 0.5)
+            sl = predicted_price - (volatility * 0.5)
             signal_strength["Take Profit"] = f"${tp:.2f}"
             signal_strength["Stop Loss"] = f"${sl:.2f}"
-        else:
-            # No position open, no strong signal
-            signal_strength["Buy"] = ""
-            signal_strength["Sell"] = ""
-            signal_strength["Take Profit"] = ""
-            signal_strength["Stop Loss"] = ""
 
     return signal_strength
 
@@ -417,7 +440,7 @@ signals_list = []
 for ticker in tickers:
     if ticker in data:
         df = compute_indicators(data[ticker], asset_class)
-        df = df.dropna()
+        df.dropna(inplace=True)
         if df.empty:
             continue
         df = generate_signals(df)
@@ -428,9 +451,13 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close"],
-            "Prediction": classification["Prediction"],
+            "Prediction (Day+1)": classification["Prediction_Day1"],
+            "Prediction (Day+2)": classification["Prediction_Day2"],
+            "Prediction (Day+3)": classification["Prediction_Day3"],
             "Take Profit": classification["Take Profit"],
-            "Stop Loss": classification["Stop Loss"]
+            "Stop Loss": classification["Stop Loss"],
+            "MAE": classification["MAE"],
+            "MAPE": classification["MAPE"]
         })
 
 if signals_list:
@@ -439,23 +466,18 @@ if signals_list:
 else:
     st.info("No signals available to display.")
 
-#############################################
-# END OF UPDATED SECTION
-#############################################
-
 st.markdown("---")
 
 st.header("🔍 Trade Signals and Price Charts")
 for ticker in tickers:
     if ticker in data:
         df = compute_indicators(data[ticker], asset_class)
-        df = df.dropna()
+        df.dropna(inplace=True)
         if df.empty:
             st.warning(f"No data to display for {ticker}.")
             continue
         df = generate_signals(df)
 
-        # Find buy and sell points from history
         trades = [trade for trade in st.session_state.trade_history if trade['Ticker'] == ticker]
         position = st.session_state.open_positions[ticker]
 
@@ -512,4 +534,4 @@ for ticker in tickers:
         st.warning(f"No data available for {ticker}.")
 
 st.markdown("---")
-st.markdown("<div style='text-align:center;'>© 2023 Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;'>© 2023 Advanced Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
