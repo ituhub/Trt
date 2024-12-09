@@ -32,12 +32,10 @@ if 'trade_history' not in st.session_state:
 if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
 
-st.title("🚀 Automated Trading Bot Dashboard - 24-Hour Prediction")
+st.title("🚀 Automated Trading Bot Dashboard - 12h, 24h, and 48h Predictions")
 st.markdown("""
-This version provides a single forecast horizon:
-- **Next 24 Hours (Next Day's Close)**
-
-All predictions focus on where the market may be in the next trading day, simplifying decision-making.
+This version uses hourly data to provide forecasts at 12 hours, 24 hours, and 48 hours into the future.
+We also compute strong take profit and stop loss levels based on recent volatility.
 """)
 
 st.sidebar.title("Navigation")
@@ -90,30 +88,23 @@ def fetch_live_data(tickers, asset_class):
         st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
         return data
 
+    # We'll fetch 15-min data and then resample to hourly for forecasting
+    # Adjust timeseries if needed. We can try fetching ~2-3 days of data (96 hours)
+    # FMP's historical endpoints might limit how far we can go, so we rely on the last couple of days.
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-
-            # Fetch a decent amount of data for indices or other assets to have stable predictions
-            if asset_class == 'Indices':
-                url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=90&apikey={api_key}'
-            else:
-                # For other assets, we try a 15-min historical endpoint and resample to daily
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/15min/{ticker_api}?apikey={api_key}'
-
+            # 15min chart
+            url = f'https://financialmodelingprep.com/api/v3/historical-chart/15min/{ticker_api}?apikey={api_key}'
             response = requests.get(url)
             response.raise_for_status()
             data_json = response.json()
 
-            if not data_json:
+            if not data_json or len(data_json) < 1:
                 st.warning(f"No data returned for {ticker}.")
                 continue
 
-            if asset_class == 'Indices':
-                df = pd.DataFrame(data_json.get('historical', []))
-            else:
-                df = pd.DataFrame(data_json)
-
+            df = pd.DataFrame(data_json)
             if df.empty:
                 st.warning(f"No data available for {ticker}.")
                 continue
@@ -123,14 +114,15 @@ def fetch_live_data(tickers, asset_class):
             df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}, inplace=True)
             df.sort_index(inplace=True)
 
-            # Resample to daily data
-            df_daily = df.resample('D').last().dropna(subset=['Close'])
+            # We now have ~15-min data. Resample to hourly
+            df_hourly = df.resample('H').last().dropna(subset=['Close'])
 
-            if df_daily.empty:
-                st.warning(f"No recent daily data for {ticker}.")
+            # If no hourly data, skip
+            if df_hourly.empty:
+                st.warning(f"No hourly data for {ticker}.")
                 continue
 
-            data[ticker] = df_daily
+            data[ticker] = df_hourly
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
     return data
@@ -154,6 +146,8 @@ def compute_MACD(series):
 
 def compute_indicators(df, asset_class):
     df = df.copy()
+    # Since we're now using hourly data, we keep short/long moving averages adapted to hours
+    # E.g., 5-hour MA and 20-hour MA
     df['MA_Short'] = df['Close'].rolling(window=5).mean()
     df['MA_Long'] = df['Close'].rolling(window=20).mean()
     df['RSI'] = compute_RSI(df['Close'])
@@ -195,6 +189,7 @@ def simulate_trades_live(data):
                     st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
                     st.success(f"✅ Bought {ticker} at ${buy_price:.2f} on {current_time}")
             else:
+                # If sell signal or profit >=10%
                 if price >= position['Buy_Price'] * 1.10 or signal == -1:
                     sell_price = price
                     profit = (sell_price - position['Buy_Price']) * position['Quantity']
@@ -288,51 +283,85 @@ else:
 st.markdown("---")
 
 #############################################
-# SINGLE-HORIZON (NEXT 24 HOURS) FORECAST
+# MULTI-HORIZON FORECAST: 12h, 24h, 48h
 #############################################
-st.header("📊 Signals and 24-Hour Prediction")
+st.header("📊 Signals and Multi-Horizon (12h, 24h, 48h) Predictions")
 
-def next_day_forecast(df):
-    # Forecast the next day's close price
-    # If insufficient data, fallback to last close
+def multi_horizon_forecast(df, horizons=[12,24,48]):
+    # We have hourly data. Prophet forecasts in terms of the same frequency (hourly)
+    # Make sure Prophet understands we're working in hours:
+    # Prophet doesn't have a direct freq param, but we can treat ds as hourly steps
+    # We'll forecast 48 hours ahead and pick predictions at h hours.
+
     if df.empty:
         return None
-    if len(df) < 2:
-        # fallback
-        return df['Close'].iloc[-1]
+
+    if len(df) < 20:
+        # fallback if not enough data
+        last_close = df['Close'].iloc[-1]
+        pred = {h: last_close for h in horizons}
+        return pred
 
     prophet_df = df.reset_index()[['date','Close']]
     prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
-    m = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True)
+    # Prophet expects a ds column in datetime. We have hourly data
+    # Enable daily seasonality to capture intraday patterns
+    m = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=False)
     m.fit(prophet_df)
-    future = m.make_future_dataframe(periods=1)
+
+    future = m.make_future_dataframe(periods=48, freq='H')  # 48 hours forecast
     forecast = m.predict(future)
-    predicted_price = forecast.iloc[-1]['yhat']
-    return predicted_price
+    forecast = forecast.set_index('ds')
+
+    pred = {}
+    last_date = prophet_df['ds'].iloc[-1]
+    for h in horizons:
+        target_date = last_date + timedelta(hours=h)
+        if target_date in forecast.index:
+            pred[h] = forecast.loc[target_date, 'yhat']
+        else:
+            # fallback to last known forecast
+            pred[h] = forecast['yhat'].iloc[-1]
+
+    return pred
 
 def classify_signal(df, position_open):
-    predicted_price = next_day_forecast(df)
-    if predicted_price is None:
-        predicted_price = df['Close'].iloc[-1]
+    predictions = multi_horizon_forecast(df, horizons=[12,24,48])
+    if predictions is None:
+        last_close = df['Close'].iloc[-1] if not df.empty else 100.0
+        predictions = {12: last_close, 24: last_close, 48: last_close}
 
-    lookback = min(20, len(df))
+    # Extract predictions
+    p12 = predictions[12]
+    p24 = predictions[24]
+    p48 = predictions[48]
+
+    # Compute volatility over the last 48 hours (2 days of hourly data)
+    lookback = min(len(df), 48)
     volatility = df['Close'].tail(lookback).std() if lookback > 1 else 1
+
+    # Use the shortest horizon (12h) prediction as anchor for TP/SL
+    predicted_price = p12
 
     last_row = df.iloc[-1]
     signal = last_row['Signal']
     rsi = last_row['RSI']
 
+    # Define strong TP/SL multipliers
+    # For a "strong" TP/SL, we might use a larger multiple of volatility, for example 2x
+    tp_factor = 2.0
+    sl_factor = 2.0
+
     signal_strength = {
         "Buy": "",
         "Sell": "",
-        "Close": "",
-        "Prediction (Next 24 Hours)": f"${predicted_price:.2f}",
+        "Close position": "",
+        "Prediction (12h)": f"${p12:.2f}",
+        "Prediction (24h)": f"${p24:.2f}",
+        "Prediction (48h)": f"${p48:.2f}",
         "Take Profit": "",
         "Stop Loss": ""
     }
-
-    tp_factor = 1.0
-    sl_factor = 1.0
 
     if signal == 1:  # Bullish
         if rsi < 30:
@@ -350,7 +379,7 @@ def classify_signal(df, position_open):
         else:
             signal_strength["Sell"] = "Potential"
         if position_open:
-            signal_strength["Close"] = "Close Position"
+            signal_strength["Close position"] = "Close Position"
         tp = predicted_price - (volatility * tp_factor)
         sl = predicted_price + (volatility * sl_factor)
         signal_strength["Take Profit"] = f"${tp:.2f}"
@@ -358,9 +387,10 @@ def classify_signal(df, position_open):
 
     else:  # Neutral
         if position_open:
-            signal_strength["Close"] = "Consider Close"
-            tp = predicted_price + (volatility * 0.5)
-            sl = predicted_price - (volatility * 0.5)
+            signal_strength["Close position"] = "Consider Close"
+            # Slightly less aggressive TP/SL for neutral
+            tp = predicted_price + (volatility * 1.0)
+            sl = predicted_price - (volatility * 1.0)
             signal_strength["Take Profit"] = f"${tp:.2f}"
             signal_strength["Stop Loss"] = f"${sl:.2f}"
 
@@ -379,8 +409,10 @@ for ticker in tickers:
             "Symbol": ticker,
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
-            "Close position": classification["Close"],
-            "Prediction (Next 24 Hours)": classification["Prediction (Next 24 Hours)"],
+            "Close position": classification["Close position"],
+            "Prediction (12h)": classification["Prediction (12h)"],
+            "Prediction (24h)": classification["Prediction (24h)"],
+            "Prediction (48h)": classification["Prediction (48h)"],
             "Take Profit": classification["Take Profit"],
             "Stop Loss": classification["Stop Loss"]
         })
@@ -446,8 +478,8 @@ for ticker in tickers:
             ))
 
         fig.update_layout(
-            xaxis_title='Date',
-            yaxis_title='Price ($)',
+            xaxis_title='Date/Time',
+            yaxis_title='Price',
             height=500,
             margin=dict(l=0, r=0, t=30, b=0),
             legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
@@ -457,4 +489,4 @@ for ticker in tickers:
         st.warning(f"No data available for {ticker}.")
 
 st.markdown("---")
-st.markdown("<div style='text-align:center;'>© 2023 Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;'>© 2023 Advanced Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
