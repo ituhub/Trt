@@ -14,9 +14,9 @@ st.set_page_config(
 )
 
 # Constants for symbols
-COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
+COMMODITIES = ["GC=F", "SI=F", "NG=F", "CL=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
-CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
+CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "BCH-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
 # List of API endpoints (if needed for reference or other uses)
