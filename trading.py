@@ -341,6 +341,89 @@ else:
 
 st.markdown("---")
 
+###################################################################
+# NEW SECTION: Table of Strong and Potential Signals with Prediction
+###################################################################
+st.header("📊 Signals and Predictions")
+
+# Function to determine signal strength and prediction
+def classify_signal(row, position_open):
+    signal_strength = {"Buy": "", "Sell": "", "Close": "", "Prediction": ""}
+    signal = row['Signal']
+    rsi = row['RSI']
+    price = row['Close']
+    
+    # Basic logic:
+    # If signal = 1 (Bullish), check RSI for strong buy condition
+    if signal == 1:
+        if rsi < 30:
+            signal_strength["Buy"] = "Strong"
+        else:
+            signal_strength["Buy"] = "Potential"
+        # No immediate sell or close
+        signal_strength["Sell"] = ""
+        signal_strength["Close"] = ""
+        # Prediction: If buy signal, predict slight increase
+        signal_strength["Prediction"] = f"${(price * 1.01):.2f}"
+        
+    elif signal == -1:
+        if rsi > 70:
+            signal_strength["Sell"] = "Strong"
+        else:
+            signal_strength["Sell"] = "Potential"
+        # If we currently hold a position, close it
+        if position_open:
+            signal_strength["Close"] = "Close Position"
+        else:
+            signal_strength["Close"] = ""
+        # Prediction: If sell signal, predict slight decrease
+        signal_strength["Prediction"] = f"${(price * 0.99):.2f}"
+        
+    else:
+        # No signal, no buy/sell
+        signal_strength["Buy"] = ""
+        signal_strength["Sell"] = ""
+        if position_open:
+            # Possibly hold or consider closing
+            signal_strength["Close"] = "Consider Close"
+        else:
+            signal_strength["Close"] = ""
+        # Prediction: If neutral, no price change predicted
+        signal_strength["Prediction"] = f"${price:.2f}"
+        
+    return signal_strength
+
+signals_list = []
+for ticker in tickers:
+    if ticker in data:
+        df = compute_indicators(data[ticker], asset_class)
+        df = df.dropna()
+        if df.empty:
+            continue
+        df = generate_signals(df)
+        latest_row = df.iloc[-1]
+        position_open = st.session_state.open_positions[ticker] is not None
+        classification = classify_signal(latest_row, position_open)
+        signals_list.append({
+            "Symbol": ticker,
+            "Buy": classification["Buy"],
+            "Sell": classification["Sell"],
+            "Close position": classification["Close"],
+            "Prediction": classification["Prediction"]
+        })
+
+if signals_list:
+    signals_df = pd.DataFrame(signals_list)
+    st.dataframe(signals_df)
+else:
+    st.info("No signals available to display.")
+
+###################################################################
+# END OF NEW SECTION
+###################################################################
+
+st.markdown("---")
+
 # Display Trade Signals and Price Charts
 st.header("🔍 Trade Signals and Price Charts")
 
