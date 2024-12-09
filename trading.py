@@ -6,7 +6,6 @@ import os
 import requests
 from datetime import datetime, timedelta
 from prophet import Prophet
-from sklearn.metrics import mean_absolute_error
 
 # Set page configuration
 st.set_page_config(
@@ -38,10 +37,11 @@ if 'balance_history' not in st.session_state:
 # Title and description
 st.title("🚀 Advanced Automated Trading Bot Dashboard")
 st.markdown("""
-This dashboard includes:
-- Enhanced forecasting using Prophet with fallback logic.
-- Dynamically adjusted stop loss and take profit levels based on volatility.
-- Multiple day-ahead predictions to minimize 'N/A' outputs.
+This dashboard now focuses on a cleaner prediction strategy:
+- Only next-day price prediction for clarity.
+- No MAE or MAPE columns.
+- More stable fallback logic to avoid "N/A".
+- Streamlined signals table for clarity and actionable information.
 """)
 
 # Sidebar navigation
@@ -127,7 +127,6 @@ def fetch_live_data(tickers, asset_class):
             df.sort_index(inplace=True)
 
             # Filter data for recent timeframe
-            # For indices, we have 90 days, for others 2 days from original code
             if asset_class == 'Indices':
                 df = df[df.index >= (datetime.utcnow() - timedelta(days=90))]
             else:
@@ -307,83 +306,38 @@ else:
 st.markdown("---")
 
 #############################################
-# ADVANCED FORECASTING, MODEL EVALUATION, MULTI-DAY PREDICTIONS, DYNAMIC TP/SL
+# SIMPLE NEXT-DAY FORECASTING & ENHANCED PREDICTION STRATEGY
 #############################################
-st.header("📊 Signals, Predictions, and Model Evaluation")
+st.header("📊 Signals and Prediction")
 
-def forecast_next_days(df, days=3, min_days=10):
+def forecast_next_day(df):
+    # Simple approach: Always forecast just one day ahead
+    # If insufficient data, fallback to last close as a "prediction".
     if df.empty:
-        return None, None, None, None
+        return None
 
     df_daily = df.resample('D').last().dropna(subset=['Close'])
-
-    if df_daily.empty or len(df_daily) < 2:
-        # Not enough data to forecast properly, fallback to last close
+    if len(df_daily) < 2:
+        # Fallback: use last close as prediction
         last_close = df['Close'].iloc[-1]
-        predictions = pd.DataFrame({
-            'ds': [df.index[-1] + timedelta(days=i) for i in range(1, days+1)],
-            'yhat': [last_close]*days
-        })
-        return predictions, None, None, last_close
+        return last_close
 
     prophet_df = df_daily.reset_index()[['date','Close']]
     prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
-
-    if len(prophet_df) < min_days:
-        # Train on all data, no test split
-        m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=True)
-        m.fit(prophet_df)
-        future = m.make_future_dataframe(periods=days)
-        final_forecast = m.predict(future)
-        predicted_prices = final_forecast.tail(days)[['ds', 'yhat']]
-        last_close = prophet_df['y'].iloc[-1]
-        return predicted_prices, None, None, last_close
-
-    # If enough data, do train/test split (7-day test if possible)
-    train_size = len(prophet_df) - 7 if len(prophet_df) > 17 else int(len(prophet_df)*0.8)
-    train_df = prophet_df.iloc[:train_size]
-    test_df = prophet_df.iloc[train_size:]
-
     m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=True)
-    m.fit(train_df)
-
-    if len(test_df) > 0:
-        future_test = m.make_future_dataframe(periods=len(test_df))
-        forecast_test = m.predict(future_test)
-        test_forecast = forecast_test.set_index('ds').loc[test_df['ds']]
-        mae = mean_absolute_error(test_df['y'], test_forecast['yhat'])
-        mape = np.mean(np.abs((test_df['y'] - test_forecast['yhat']) / test_df['y'])) * 100
-    else:
-        mae, mape = None, None
-
-    future = m.make_future_dataframe(periods=days)
+    m.fit(prophet_df)
+    future = m.make_future_dataframe(periods=1)
     final_forecast = m.predict(future)
-    predicted_prices = final_forecast.tail(days)[['ds', 'yhat']]
-    last_close = prophet_df['y'].iloc[-1]
-
-    return predicted_prices, mae, mape, last_close
+    predicted_price = final_forecast.iloc[-1]['yhat']
+    return predicted_price
 
 def classify_signal(df, position_open):
-    predictions, mae, mape, last_close = forecast_next_days(df)
+    predicted_price = forecast_next_day(df)
+    if predicted_price is None:
+        # Fallback if no data
+        predicted_price = df['Close'].iloc[-1]
 
-    if predictions is None:
-        last_close_price = df['Close'].iloc[-1]
-        return {
-            "Buy": "",
-            "Sell": "",
-            "Close": "",
-            "Prediction_Day1": f"${last_close_price:.2f}",
-            "Prediction_Day2": f"${last_close_price:.2f}",
-            "Prediction_Day3": f"${last_close_price:.2f}",
-            "Take Profit": "",
-            "Stop Loss": "",
-            "MAE": "N/A",
-            "MAPE": "N/A"
-        }
-
-    day_preds = predictions['yhat'].values
-    predicted_price = day_preds[0]
-
+    # Compute volatility
     df_daily = df.resample('D').last().dropna(subset=['Close'])
     if len(df_daily) < 2:
         volatility = (df['Close'].std() if len(df)>1 else 1)
@@ -400,11 +354,7 @@ def classify_signal(df, position_open):
         "Buy": "",
         "Sell": "",
         "Close": "",
-        "Prediction_Day1": f"${day_preds[0]:.2f}",
-        "Prediction_Day2": f"${day_preds[1]:.2f}" if len(day_preds) > 1 else "N/A",
-        "Prediction_Day3": f"${day_preds[2]:.2f}" if len(day_preds) > 2 else "N/A",
-        "MAE": f"{mae:.2f}" if mae is not None else "N/A",
-        "MAPE": f"{mape:.2f}%" if mape is not None else "N/A",
+        "Prediction": f"${predicted_price:.2f}",
         "Take Profit": "",
         "Stop Loss": ""
     }
@@ -417,6 +367,7 @@ def classify_signal(df, position_open):
             signal_strength["Buy"] = "Strong"
         else:
             signal_strength["Buy"] = "Potential"
+        # Adjust TP and SL around predicted price
         tp = predicted_price + (volatility * tp_factor)
         sl = predicted_price - (volatility * sl_factor)
         signal_strength["Take Profit"] = f"${tp:.2f}"
@@ -459,13 +410,9 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close"],
-            "Prediction (Day+1)": classification["Prediction_Day1"],
-            "Prediction (Day+2)": classification["Prediction_Day2"],
-            "Prediction (Day+3)": classification["Prediction_Day3"],
+            "Prediction": classification["Prediction"],
             "Take Profit": classification["Take Profit"],
-            "Stop Loss": classification["Stop Loss"],
-            "MAE": classification["MAE"],
-            "MAPE": classification["MAPE"]
+            "Stop Loss": classification["Stop Loss"]
         })
 
 if signals_list:
@@ -475,7 +422,6 @@ else:
     st.info("No signals available to display.")
 
 st.markdown("---")
-
 st.header("🔍 Trade Signals and Price Charts")
 for ticker in tickers:
     if ticker in data:
