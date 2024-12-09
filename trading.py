@@ -6,6 +6,19 @@ import os
 import requests
 from datetime import datetime, timedelta
 
+# Set page configuration as the first Streamlit command
+st.set_page_config(
+    page_title="Automated Trading Bot Dashboard",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://www.extremelycoolapp.com/help',
+        'Report a bug': "https://www.extremelycoolapp.com/bug",
+        'About': "# This is an *automated trading bot dashboard*!"
+    }
+)
+
 # Constants for symbols
 COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
