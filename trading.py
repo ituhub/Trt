@@ -32,14 +32,12 @@ if 'trade_history' not in st.session_state:
 if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
 
-st.title("🚀 Advanced Automated Trading Bot Dashboard")
+st.title("🚀 Automated Trading Bot Dashboard - 24-Hour Prediction")
 st.markdown("""
-This version provides predictions at multiple horizons:
-- Next Trading Day
-- 48 Hours (Approximately 2 trading days ahead)
-- Next Week (7 days ahead)
+This version provides a single forecast horizon:
+- **Next 24 Hours (Next Day's Close)**
 
-We still rely on Prophet for forecasting daily prices. The code attempts to provide more stable forecasts by using more historical data.
+All predictions focus on where the market may be in the next trading day, simplifying decision-making.
 """)
 
 st.sidebar.title("Navigation")
@@ -95,12 +93,12 @@ def fetch_live_data(tickers, asset_class):
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-            # Increase timeseries for indices for more data
+
+            # Fetch a decent amount of data for indices or other assets to have stable predictions
             if asset_class == 'Indices':
                 url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=90&apikey={api_key}'
             else:
-                # For others, consider a longer timeframe if available
-                # Here we only have a short timeframe endpoint. Ideally, use a different endpoint for more data.
+                # For other assets, we try a 15-min historical endpoint and resample to daily
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/15min/{ticker_api}?apikey={api_key}'
 
             response = requests.get(url)
@@ -125,11 +123,9 @@ def fetch_live_data(tickers, asset_class):
             df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}, inplace=True)
             df.sort_index(inplace=True)
 
-            # For indices we have up to 90 days, for others we have intraday data - resample to daily
-            # We'll rely on daily predictions, so resample everything to daily
+            # Resample to daily data
             df_daily = df.resample('D').last().dropna(subset=['Close'])
 
-            # If still no recent data, skip
             if df_daily.empty:
                 st.warning(f"No recent daily data for {ticker}.")
                 continue
@@ -158,8 +154,6 @@ def compute_MACD(series):
 
 def compute_indicators(df, asset_class):
     df = df.copy()
-    # Using daily data directly
-    # Adjust MA periods if needed
     df['MA_Short'] = df['Close'].rolling(window=5).mean()
     df['MA_Long'] = df['Close'].rolling(window=20).mean()
     df['RSI'] = compute_RSI(df['Close'])
@@ -294,74 +288,45 @@ else:
 st.markdown("---")
 
 #############################################
-# MULTI-HORIZON FORECAST: 1 Day, 2 Days, 7 Days
+# SINGLE-HORIZON (NEXT 24 HOURS) FORECAST
 #############################################
-st.header("📊 Signals and Multi-Horizon Predictions")
+st.header("📊 Signals and 24-Hour Prediction")
 
-def multi_horizon_forecast(df, horizons=[1,2,7]):
-    # Forecast daily prices for next 7 days
-    # Extract predictions for given horizons
+def next_day_forecast(df):
+    # Forecast the next day's close price
+    # If insufficient data, fallback to last close
     if df.empty:
         return None
-
     if len(df) < 2:
-        # Fallback to last close if not enough data
-        last_close = df['Close'].iloc[-1]
-        pred = {h: last_close for h in horizons}
-        return pred
+        # fallback
+        return df['Close'].iloc[-1]
 
     prophet_df = df.reset_index()[['date','Close']]
     prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
-
-    # Train Prophet
     m = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True)
     m.fit(prophet_df)
-    future = m.make_future_dataframe(periods=7)  # at least 7 days
+    future = m.make_future_dataframe(periods=1)
     forecast = m.predict(future)
-    forecast = forecast.set_index('ds')
-
-    pred = {}
-    last_date = prophet_df['ds'].iloc[-1]
-    for h in horizons:
-        target_date = last_date + timedelta(days=h)
-        if target_date in forecast.index:
-            pred[h] = forecast.loc[target_date, 'yhat']
-        else:
-            # if missing target_date for some reason, fallback to last known forecast
-            pred[h] = forecast['yhat'].iloc[-1]
-    return pred
+    predicted_price = forecast.iloc[-1]['yhat']
+    return predicted_price
 
 def classify_signal(df, position_open):
-    predictions = multi_horizon_forecast(df, horizons=[1,2,7])
-    if predictions is None:
-        # No predictions at all
-        last_close = df['Close'].iloc[-1]
-        predictions = {1: last_close, 2: last_close, 7: last_close}
+    predicted_price = next_day_forecast(df)
+    if predicted_price is None:
+        predicted_price = df['Close'].iloc[-1]
 
-    # Extract predictions
-    day1_pred = predictions[1]
-    day2_pred = predictions[2]
-    day7_pred = predictions[7]
-
-    # Volatility calculation
     lookback = min(20, len(df))
     volatility = df['Close'].tail(lookback).std() if lookback > 1 else 1
 
     last_row = df.iloc[-1]
     signal = last_row['Signal']
     rsi = last_row['RSI']
-    price = last_row['Close']
-
-    # Use day+1 prediction for SL/TP
-    predicted_price = day1_pred
 
     signal_strength = {
         "Buy": "",
         "Sell": "",
         "Close": "",
-        "Prediction (Next Day)": f"${day1_pred:.2f}",
-        "Prediction (48 Hours)": f"${day2_pred:.2f}",
-        "Prediction (Next Week)": f"${day7_pred:.2f}",
+        "Prediction (Next 24 Hours)": f"${predicted_price:.2f}",
         "Take Profit": "",
         "Stop Loss": ""
     }
@@ -415,9 +380,7 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close"],
-            "Prediction (Next Day)": classification["Prediction (Next Day)"],
-            "Prediction (48 Hours)": classification["Prediction (48 Hours)"],
-            "Prediction (Next Week)": classification["Prediction (Next Week)"],
+            "Prediction (Next 24 Hours)": classification["Prediction (Next 24 Hours)"],
             "Take Profit": classification["Take Profit"],
             "Stop Loss": classification["Stop Loss"]
         })
@@ -494,4 +457,4 @@ for ticker in tickers:
         st.warning(f"No data available for {ticker}.")
 
 st.markdown("---")
-st.markdown("<div style='text-align:center;'>© 2023 Advanced Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;'>© 2023 Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
