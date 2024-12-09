@@ -7,20 +7,18 @@ import requests
 from datetime import datetime, timedelta
 from prophet import Prophet
 
-# Set page configuration
 st.set_page_config(
     page_title="Advanced Automated Trading Bot Dashboard",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Constants for symbols
+# Constants
 COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
 CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
-# Initialize session state
 if 'initial_balance' not in st.session_state:
     st.session_state.initial_balance = 10000
 if 'balance' not in st.session_state:
@@ -34,17 +32,16 @@ if 'trade_history' not in st.session_state:
 if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
 
-# Title and description
 st.title("🚀 Advanced Automated Trading Bot Dashboard")
 st.markdown("""
-This dashboard now focuses on a cleaner prediction strategy:
-- Only next-day price prediction for clarity.
-- No MAE or MAPE columns.
-- More stable fallback logic to avoid "N/A".
-- Streamlined signals table for clarity and actionable information.
+This version provides predictions at multiple horizons:
+- Next Trading Day
+- 48 Hours (Approximately 2 trading days ahead)
+- Next Week (7 days ahead)
+
+We still rely on Prophet for forecasting daily prices. The code attempts to provide more stable forecasts by using more historical data.
 """)
 
-# Sidebar navigation
 st.sidebar.title("Navigation")
 section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Cryptocurrency"])
 
@@ -98,11 +95,13 @@ def fetch_live_data(tickers, asset_class):
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-            # Increase timeseries for indices to get more data
+            # Increase timeseries for indices for more data
             if asset_class == 'Indices':
                 url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=90&apikey={api_key}'
             else:
-                url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
+                # For others, consider a longer timeframe if available
+                # Here we only have a short timeframe endpoint. Ideally, use a different endpoint for more data.
+                url = f'https://financialmodelingprep.com/api/v3/historical-chart/15min/{ticker_api}?apikey={api_key}'
 
             response = requests.get(url)
             response.raise_for_status()
@@ -126,17 +125,16 @@ def fetch_live_data(tickers, asset_class):
             df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}, inplace=True)
             df.sort_index(inplace=True)
 
-            # Filter data for recent timeframe
-            if asset_class == 'Indices':
-                df = df[df.index >= (datetime.utcnow() - timedelta(days=90))]
-            else:
-                df = df[df.index >= (datetime.utcnow() - timedelta(days=2))]
+            # For indices we have up to 90 days, for others we have intraday data - resample to daily
+            # We'll rely on daily predictions, so resample everything to daily
+            df_daily = df.resample('D').last().dropna(subset=['Close'])
 
-            if df.empty:
-                st.warning(f"No recent data for {ticker}.")
+            # If still no recent data, skip
+            if df_daily.empty:
+                st.warning(f"No recent daily data for {ticker}.")
                 continue
 
-            data[ticker] = df
+            data[ticker] = df_daily
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
     return data
@@ -160,15 +158,13 @@ def compute_MACD(series):
 
 def compute_indicators(df, asset_class):
     df = df.copy()
-    if asset_class == 'Indices':
-        df['MA_Short'] = df['Close'].rolling(window=5).mean()
-        df['MA_Long'] = df['Close'].rolling(window=20).mean()
-    else:
-        df['MA_Short'] = df['Close'].rolling(window=10).mean()
-        df['MA_Long'] = df['Close'].rolling(window=30).mean()
+    # Using daily data directly
+    # Adjust MA periods if needed
+    df['MA_Short'] = df['Close'].rolling(window=5).mean()
+    df['MA_Long'] = df['Close'].rolling(window=20).mean()
     df['RSI'] = compute_RSI(df['Close'])
     df['MACD'], df['MACD_Signal'] = compute_MACD(df['Close'])
-    return df
+    return df.dropna()
 
 def generate_signals(df):
     df['Signal'] = 0
@@ -180,12 +176,8 @@ def simulate_trades_live(data):
     for ticker in tickers:
         if ticker in data:
             df = compute_indicators(data[ticker], asset_class)
-            df.dropna(inplace=True)
-
             if df.empty:
-                st.warning(f"No data for {ticker}.")
                 continue
-            
             df = generate_signals(df)
             allocated = st.session_state.allocated_capital[ticker]
             position = st.session_state.open_positions[ticker]
@@ -209,7 +201,6 @@ def simulate_trades_live(data):
                     st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
                     st.success(f"✅ Bought {ticker} at ${buy_price:.2f} on {current_time}")
             else:
-                # Check if 10% profit or sell signal
                 if price >= position['Buy_Price'] * 1.10 or signal == -1:
                     sell_price = price
                     profit = (sell_price - position['Buy_Price']) * position['Quantity']
@@ -225,9 +216,6 @@ def simulate_trades_live(data):
                     })
                     st.success(f"✅ Sold {ticker} at ${sell_price:.2f} on {current_time} | Profit: ${profit:.2f}")
                     st.session_state.open_positions[ticker] = None
-        else:
-            st.warning(f"No data for {ticker}.")
-    return
 
 data = fetch_live_data(tickers, asset_class)
 if not data:
@@ -306,55 +294,74 @@ else:
 st.markdown("---")
 
 #############################################
-# SIMPLE NEXT-DAY FORECASTING & ENHANCED PREDICTION STRATEGY
+# MULTI-HORIZON FORECAST: 1 Day, 2 Days, 7 Days
 #############################################
-st.header("📊 Signals and Prediction")
+st.header("📊 Signals and Multi-Horizon Predictions")
 
-def forecast_next_day(df):
-    # Simple approach: Always forecast just one day ahead
-    # If insufficient data, fallback to last close as a "prediction".
+def multi_horizon_forecast(df, horizons=[1,2,7]):
+    # Forecast daily prices for next 7 days
+    # Extract predictions for given horizons
     if df.empty:
         return None
 
-    df_daily = df.resample('D').last().dropna(subset=['Close'])
-    if len(df_daily) < 2:
-        # Fallback: use last close as prediction
+    if len(df) < 2:
+        # Fallback to last close if not enough data
         last_close = df['Close'].iloc[-1]
-        return last_close
+        pred = {h: last_close for h in horizons}
+        return pred
 
-    prophet_df = df_daily.reset_index()[['date','Close']]
+    prophet_df = df.reset_index()[['date','Close']]
     prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
-    m = Prophet(daily_seasonality=True, yearly_seasonality=False, weekly_seasonality=True)
+
+    # Train Prophet
+    m = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True)
     m.fit(prophet_df)
-    future = m.make_future_dataframe(periods=1)
-    final_forecast = m.predict(future)
-    predicted_price = final_forecast.iloc[-1]['yhat']
-    return predicted_price
+    future = m.make_future_dataframe(periods=7)  # at least 7 days
+    forecast = m.predict(future)
+    forecast = forecast.set_index('ds')
+
+    pred = {}
+    last_date = prophet_df['ds'].iloc[-1]
+    for h in horizons:
+        target_date = last_date + timedelta(days=h)
+        if target_date in forecast.index:
+            pred[h] = forecast.loc[target_date, 'yhat']
+        else:
+            # if missing target_date for some reason, fallback to last known forecast
+            pred[h] = forecast['yhat'].iloc[-1]
+    return pred
 
 def classify_signal(df, position_open):
-    predicted_price = forecast_next_day(df)
-    if predicted_price is None:
-        # Fallback if no data
-        predicted_price = df['Close'].iloc[-1]
+    predictions = multi_horizon_forecast(df, horizons=[1,2,7])
+    if predictions is None:
+        # No predictions at all
+        last_close = df['Close'].iloc[-1]
+        predictions = {1: last_close, 2: last_close, 7: last_close}
 
-    # Compute volatility
-    df_daily = df.resample('D').last().dropna(subset=['Close'])
-    if len(df_daily) < 2:
-        volatility = (df['Close'].std() if len(df)>1 else 1)
-    else:
-        lookback = min(20, len(df_daily))
-        volatility = df_daily['Close'].tail(lookback).std()
+    # Extract predictions
+    day1_pred = predictions[1]
+    day2_pred = predictions[2]
+    day7_pred = predictions[7]
+
+    # Volatility calculation
+    lookback = min(20, len(df))
+    volatility = df['Close'].tail(lookback).std() if lookback > 1 else 1
 
     last_row = df.iloc[-1]
     signal = last_row['Signal']
     rsi = last_row['RSI']
     price = last_row['Close']
 
+    # Use day+1 prediction for SL/TP
+    predicted_price = day1_pred
+
     signal_strength = {
         "Buy": "",
         "Sell": "",
         "Close": "",
-        "Prediction": f"${predicted_price:.2f}",
+        "Prediction (Next Day)": f"${day1_pred:.2f}",
+        "Prediction (48 Hours)": f"${day2_pred:.2f}",
+        "Prediction (Next Week)": f"${day7_pred:.2f}",
         "Take Profit": "",
         "Stop Loss": ""
     }
@@ -367,7 +374,6 @@ def classify_signal(df, position_open):
             signal_strength["Buy"] = "Strong"
         else:
             signal_strength["Buy"] = "Potential"
-        # Adjust TP and SL around predicted price
         tp = predicted_price + (volatility * tp_factor)
         sl = predicted_price - (volatility * sl_factor)
         signal_strength["Take Profit"] = f"${tp:.2f}"
@@ -399,7 +405,6 @@ signals_list = []
 for ticker in tickers:
     if ticker in data:
         df = compute_indicators(data[ticker], asset_class)
-        df.dropna(inplace=True)
         if df.empty:
             continue
         df = generate_signals(df)
@@ -410,7 +415,9 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close"],
-            "Prediction": classification["Prediction"],
+            "Prediction (Next Day)": classification["Prediction (Next Day)"],
+            "Prediction (48 Hours)": classification["Prediction (48 Hours)"],
+            "Prediction (Next Week)": classification["Prediction (Next Week)"],
             "Take Profit": classification["Take Profit"],
             "Stop Loss": classification["Stop Loss"]
         })
@@ -426,7 +433,6 @@ st.header("🔍 Trade Signals and Price Charts")
 for ticker in tickers:
     if ticker in data:
         df = compute_indicators(data[ticker], asset_class)
-        df.dropna(inplace=True)
         if df.empty:
             st.warning(f"No data to display for {ticker}.")
             continue
