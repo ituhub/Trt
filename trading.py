@@ -15,12 +15,12 @@ st.set_page_config(
 )
 
 # Constants for symbols
-COMMODITIES = ["GC=F", "SI=F", "NG=F", "CL=F", "KC=F"]
+COMMODITIES = ["GC=F", "SI=F", "NG=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
 CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "BCH-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI"]
 
-# List of API endpoints (if needed)
+# API endpoints if needed (not currently used)
 api_endpoints = {
     "cryptocurrencies": "https://financialmodelingprep.com/api/v3/symbol/available-cryptocurrencies",
     "forex": "https://financialmodelingprep.com/api/v3/symbol/available-forex-currency-pairs",
@@ -77,7 +77,7 @@ else:
     st.error("Invalid section selected.")
     st.stop()
 
-# Validate the contents of tickers
+# Validate tickers
 if not tickers:
     st.error(f"No tickers defined for section: {section}")
     st.stop()
@@ -94,15 +94,14 @@ for ticker in tickers:
     if ticker not in st.session_state.allocated_capital:
         st.session_state.allocated_capital[ticker] = capital_per_ticker
     if ticker not in st.session_state.open_positions:
-        st.session_state.open_positions[ticker] = None  # None indicates no open position
+        st.session_state.open_positions[ticker] = None  # None means no open position
 
-# Function to fetch live data from FMP
 def fetch_live_data(tickers, asset_class):
     data = {}
     api_key = os.getenv("FMP_API_KEY")
 
     if not api_key:
-        st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
+        st.error("API key not found. Set 'FMP_API_KEY'.")
         return data
 
     for ticker in tickers:
@@ -111,10 +110,8 @@ def fetch_live_data(tickers, asset_class):
 
             # Different endpoints based on asset_class
             if asset_class == 'Indices':
-                # Indices: Use historical-price-full (daily data)
                 url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{ticker_api}?timeseries=30&apikey={api_key}'
             else:
-                # Forex, Commodities, Cryptocurrency: Use 5-minute historical data
                 url = f'https://financialmodelingprep.com/api/v3/historical-chart/5min/{ticker_api}?apikey={api_key}'
 
             response = requests.get(url)
@@ -126,10 +123,8 @@ def fetch_live_data(tickers, asset_class):
                 continue
 
             if asset_class == 'Indices':
-                # For indices, data is under 'historical'
                 df = pd.DataFrame(data_json.get('historical', []))
             else:
-                # For others, the data is a direct list
                 df = pd.DataFrame(data_json)
 
             if df.empty:
@@ -138,19 +133,16 @@ def fetch_live_data(tickers, asset_class):
 
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
-            df = df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'})
-            df = df.sort_index()
+            df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}, inplace=True)
+            df.sort_index(inplace=True)
 
-            # Filter data for recent timeframe
             if asset_class == 'Indices':
-                # Last 30 days for Indices
                 df = df[df.index >= (datetime.utcnow() - timedelta(days=30))]
             else:
-                # Last 2 days for other asset classes
                 df = df[df.index >= (datetime.utcnow() - timedelta(days=2))]
 
             if df.empty:
-                st.warning(f"No recent data available for {ticker}.")
+                st.warning(f"No recent data for {ticker}.")
                 continue
 
             data[ticker] = df
@@ -200,14 +192,13 @@ def simulate_trades_live(data):
             df = df.dropna()
 
             if df.empty:
-                st.warning(f"No data to process for {ticker}.")
+                st.warning(f"No data for {ticker}.")
                 continue
             
             df = generate_signals(df)
             allocated = st.session_state.allocated_capital[ticker]
             position = st.session_state.open_positions[ticker]
 
-            # Process the most recent data point
             current_time = df.index[-1]
             row = df.iloc[-1]
             signal = row['Signal']
@@ -224,7 +215,6 @@ def simulate_trades_live(data):
                         'Quantity': quantity
                     }
                     st.session_state.open_positions[ticker] = position
-                    # Update balance
                     st.session_state.balance -= allocated
                     st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
                     st.success(f"✅ Bought {ticker} at ${buy_price:.2f} on {current_time}")
@@ -246,24 +236,22 @@ def simulate_trades_live(data):
                     st.success(f"✅ Sold {ticker} at ${sell_price:.2f} on {current_time} | Profit: ${profit:.2f}")
                     st.session_state.open_positions[ticker] = None
         else:
-            st.warning(f"No data available for {ticker}.")
+            st.warning(f"No data for {ticker}.")
     return
 
 # Fetch live data
 data = fetch_live_data(tickers, asset_class)
 
 if not data:
-    st.error("No data fetched. Please check the tickers and API availability.")
+    st.error("No data fetched. Check tickers and API.")
     st.stop()
 
-# Simulate trades on live data
+# Simulate trades
 simulate_trades_live(data)
 
-# Main layout
 st.markdown("---")
 col1, col2 = st.columns(2)
 
-# Display Account Overview
 with col1:
     st.header("💰 Account Overview")
     st.metric("Initial Balance", f"${st.session_state.initial_balance:,.2f}")
@@ -281,12 +269,10 @@ with col1:
         st.metric("Total Trades", "0")
         st.metric("Winning Percentage", "0.00%")
 
-# Display Account Balance Over Time
 with col2:
     st.header("📈 Account Balance Over Time")
     if st.session_state.balance_history:
-        balance_df = pd.DataFrame(st.session_state.balance_history)
-        balance_df = balance_df.drop_duplicates(subset=['Time'])
+        balance_df = pd.DataFrame(st.session_state.balance_history).drop_duplicates(subset=['Time'])
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=balance_df['Time'], y=balance_df['Balance'], mode='lines', name='Balance'))
         fig.update_layout(xaxis_title='Time', yaxis_title='Balance ($)', height=400)
@@ -295,8 +281,6 @@ with col2:
         st.info("No account activity to display.")
 
 st.markdown("---")
-
-# Display Trade History
 st.header("📝 Trade History")
 if st.session_state.trade_history:
     trades_df = pd.DataFrame(st.session_state.trade_history)
@@ -309,8 +293,6 @@ else:
     st.info("No trades executed yet.")
 
 st.markdown("---")
-
-# Display Open Positions
 st.header("📌 Current Open Positions")
 if any(position is not None for position in st.session_state.open_positions.values()):
     open_positions_list = []
@@ -339,9 +321,9 @@ else:
 
 st.markdown("---")
 
-###################################################################
-# Updated SECTION: Advanced Forecasting + TP/SL in Predictions
-###################################################################
+#############################################
+# Adjusted SECTION: Advanced Forecasting + Revised TP/SL
+#############################################
 st.header("📊 Signals and Predictions")
 
 def forecast_next_day_price(df):
@@ -371,64 +353,64 @@ def classify_signal(df, position_open):
     
     predicted_price = forecast_next_day_price(df)
     if predicted_price is None:
-        predicted_price = price  # fallback if forecast failed
+        predicted_price = price  # fallback
+    
+    signal_strength = {
+        "Buy": "",
+        "Sell": "",
+        "Close": "",
+        "Prediction": f"${predicted_price:.2f}",
+        "Take Profit": "",
+        "Stop Loss": ""
+    }
 
-    signal_strength = {"Buy": "", "Sell": "", "Close": "", "Prediction": "", "Take Profit": "", "Stop Loss": ""}
+    # Define small, closer increments around the predicted price
+    # For Buy: TP at predicted_price *1.02, SL at predicted_price*0.98
+    # For Sell: TP at predicted_price *0.98, SL at predicted_price*1.02 (since we profit if price goes down)
+    # For Neutral with position: narrower band around predicted price, e.g. ±1%
 
-    # Example logic for TP/SL:
-    # Buy scenario: TP at +5% of predicted, SL at -5% of current
-    # Sell scenario: no TP/SL recommended (or you can define)
-    # Neutral with position: TP at +3% of predicted, SL at -3% of current
     if signal == 1:
-        # Bullish signal
+        # Bullish
         if rsi < 30:
             signal_strength["Buy"] = "Strong"
         else:
             signal_strength["Buy"] = "Potential"
-        signal_strength["Sell"] = ""
-        signal_strength["Close"] = ""
-        signal_strength["Prediction"] = f"${predicted_price:.2f}"
-        
-        # Take Profit & Stop Loss for a Buy scenario
-        take_profit = predicted_price * 1.05
-        stop_loss = price * 0.95
-        signal_strength["Take Profit"] = f"${take_profit:.2f}"
-        signal_strength["Stop Loss"] = f"${stop_loss:.2f}"
-        
+        # Set TP & SL around predicted price
+        tp = predicted_price * 1.02
+        sl = predicted_price * 0.98
+        signal_strength["Take Profit"] = f"${tp:.2f}"
+        signal_strength["Stop Loss"] = f"${sl:.2f}"
+
     elif signal == -1:
-        # Bearish signal
+        # Bearish
         if rsi > 70:
             signal_strength["Sell"] = "Strong"
         else:
             signal_strength["Sell"] = "Potential"
         if position_open:
             signal_strength["Close"] = "Close Position"
-        else:
-            signal_strength["Close"] = ""
-        signal_strength["Prediction"] = f"${predicted_price:.2f}"
-        
-        # For a Sell scenario, we might leave TP/SL blank (or define your own logic)
-        signal_strength["Take Profit"] = ""
-        signal_strength["Stop Loss"] = ""
-        
+        # For a sell, TP if price goes down (predicted_price *0.98), SL if price goes up (predicted_price*1.02)
+        tp = predicted_price * 0.98
+        sl = predicted_price * 1.02
+        signal_strength["Take Profit"] = f"${tp:.2f}"
+        signal_strength["Stop Loss"] = f"${sl:.2f}"
+
     else:
-        # Neutral signal
-        signal_strength["Buy"] = ""
-        signal_strength["Sell"] = ""
+        # Neutral
         if position_open:
             signal_strength["Close"] = "Consider Close"
-            
-            # TP/SL for neutral if holding position: +3%/-3%
-            take_profit = predicted_price * 1.03
-            stop_loss = price * 0.97
-            signal_strength["Take Profit"] = f"${take_profit:.2f}"
-            signal_strength["Stop Loss"] = f"${stop_loss:.2f}"
+            # Narrow band around predicted price ±1%
+            tp = predicted_price * 1.01
+            sl = predicted_price * 0.99
+            signal_strength["Take Profit"] = f"${tp:.2f}"
+            signal_strength["Stop Loss"] = f"${sl:.2f}"
         else:
-            signal_strength["Close"] = ""
+            # No position open, no strong signal
+            signal_strength["Buy"] = ""
+            signal_strength["Sell"] = ""
             signal_strength["Take Profit"] = ""
             signal_strength["Stop Loss"] = ""
-        signal_strength["Prediction"] = f"${predicted_price:.2f}"
-        
+
     return signal_strength
 
 signals_list = []
@@ -457,15 +439,13 @@ if signals_list:
 else:
     st.info("No signals available to display.")
 
-###################################################################
+#############################################
 # END OF UPDATED SECTION
-###################################################################
+#############################################
 
 st.markdown("---")
 
-# Display Trade Signals and Price Charts
 st.header("🔍 Trade Signals and Price Charts")
-
 for ticker in tickers:
     if ticker in data:
         df = compute_indicators(data[ticker], asset_class)
@@ -475,13 +455,12 @@ for ticker in tickers:
             continue
         df = generate_signals(df)
 
-        # Find buy and sell points from trade_history
+        # Find buy and sell points from history
         trades = [trade for trade in st.session_state.trade_history if trade['Ticker'] == ticker]
         position = st.session_state.open_positions[ticker]
 
         st.subheader(f"{ticker} Price Chart with Trade Signals")
 
-        # Prepare data for plotting
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
             x=df.index,
@@ -494,13 +473,12 @@ for ticker in tickers:
             decreasing_line_color='red'
         ))
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['MA_Short'], line=dict(color='blue', width=1), name='MA Short'
+            x=df.index, y=df['MA_Short'], line=dict(width=1), name='MA Short'
         ))
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['MA_Long'], line=dict(color='orange', width=1), name='MA Long'
+            x=df.index, y=df['MA_Long'], line=dict(width=1), name='MA Long'
         ))
 
-        # Add Buy/Sell markers
         if trades:
             buy_times = [pd.to_datetime(trade['Buy_Time']) for trade in trades]
             buy_prices = [trade['Buy_Price'] for trade in trades]
@@ -516,7 +494,6 @@ for ticker in tickers:
                 marker_size=12, name='Sell Signal'
             ))
 
-        # Add current open position marker
         if position:
             fig.add_trace(go.Scatter(
                 x=[position['Buy_Time']], y=[position['Buy_Price']], mode='markers',
@@ -534,6 +511,5 @@ for ticker in tickers:
     else:
         st.warning(f"No data available for {ticker}.")
 
-# Footer
 st.markdown("---")
 st.markdown("<div style='text-align:center;'>© 2023 Trading Bot Dashboard | Powered by Streamlit</div>", unsafe_allow_html=True)
