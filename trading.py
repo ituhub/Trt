@@ -6,9 +6,10 @@ import os
 import requests
 from datetime import datetime, timedelta
 from prophet import Prophet
+from sklearn.metrics import mean_absolute_error
 
 st.set_page_config(
-    page_title="Advanced Automated Trading Bot Dashboard",
+    page_title="Advanced Trading Bot Dashboard (8h, 16h, 24h Predictions)",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -16,8 +17,8 @@ st.set_page_config(
 # Constants
 COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
-CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "BCH-USD"]
-INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "NVDA"]
+CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
+INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
 if 'initial_balance' not in st.session_state:
     st.session_state.initial_balance = 10000
@@ -32,10 +33,13 @@ if 'trade_history' not in st.session_state:
 if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
 
-st.title("🚀 Automated Trading Bot Dashboard - 12h, 24h, and 48h Predictions")
+st.title("🚀 Automated Trading Bot Dashboard - 8h, 16h, 24h Predictions with Model Accuracy")
 st.markdown("""
-This version uses hourly data to provide forecasts at 12 hours, 24 hours, and 48 hours into the future.
-We also compute strong take profit and stop loss levels based on recent volatility.
+This version:
+- Uses hourly data for more granular forecasting.
+- Provides predictions at 8, 16, and 24 hours into the future.
+- Performs a train/test split and computes model accuracy.
+- Displays a "Model Accuracy" column in the signals table.
 """)
 
 st.sidebar.title("Navigation")
@@ -88,13 +92,10 @@ def fetch_live_data(tickers, asset_class):
         st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
         return data
 
-    # We'll fetch 15-min data and then resample to hourly for forecasting
-    # Adjust timeseries if needed. We can try fetching ~2-3 days of data (96 hours)
-    # FMP's historical endpoints might limit how far we can go, so we rely on the last couple of days.
+    # Fetch 15-min data and resample to hourly for better intraday patterns
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
-            # 15min chart
             url = f'https://financialmodelingprep.com/api/v3/historical-chart/15min/{ticker_api}?apikey={api_key}'
             response = requests.get(url)
             response.raise_for_status()
@@ -114,10 +115,7 @@ def fetch_live_data(tickers, asset_class):
             df.rename(columns={'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}, inplace=True)
             df.sort_index(inplace=True)
 
-            # We now have ~15-min data. Resample to hourly
             df_hourly = df.resample('H').last().dropna(subset=['Close'])
-
-            # If no hourly data, skip
             if df_hourly.empty:
                 st.warning(f"No hourly data for {ticker}.")
                 continue
@@ -146,8 +144,6 @@ def compute_MACD(series):
 
 def compute_indicators(df, asset_class):
     df = df.copy()
-    # Since we're now using hourly data, we keep short/long moving averages adapted to hours
-    # E.g., 5-hour MA and 20-hour MA
     df['MA_Short'] = df['Close'].rolling(window=5).mean()
     df['MA_Long'] = df['Close'].rolling(window=20).mean()
     df['RSI'] = compute_RSI(df['Close'])
@@ -189,7 +185,6 @@ def simulate_trades_live(data):
                     st.session_state.balance_history.append({'Time': current_time, 'Balance': st.session_state.balance})
                     st.success(f"✅ Bought {ticker} at ${buy_price:.2f} on {current_time}")
             else:
-                # If sell signal or profit >=10%
                 if price >= position['Buy_Price'] * 1.10 or signal == -1:
                     sell_price = price
                     profit = (sell_price - position['Buy_Price']) * position['Quantity']
@@ -283,72 +278,92 @@ else:
 st.markdown("---")
 
 #############################################
-# MULTI-HORIZON FORECAST: 12h, 24h, 48h
+# MULTI-HORIZON FORECAST: 8h, 16h, 24h + Model Accuracy
 #############################################
-st.header("📊 Signals and Multi-Horizon (12h, 24h, 48h) Predictions")
+st.header("📊 Signals and Multi-Horizon (8h, 16h, 24h) Predictions with Model Accuracy")
 
-def multi_horizon_forecast(df, horizons=[12,24,48]):
-    # We have hourly data. Prophet forecasts in terms of the same frequency (hourly)
-    # Make sure Prophet understands we're working in hours:
-    # Prophet doesn't have a direct freq param, but we can treat ds as hourly steps
-    # We'll forecast 48 hours ahead and pick predictions at h hours.
+from sklearn.metrics import mean_absolute_error
 
-    if df.empty:
-        return None
+def mean_absolute_percentage_error(y_true, y_pred):
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
-    if len(df) < 20:
-        # fallback if not enough data
-        last_close = df['Close'].iloc[-1]
-        pred = {h: last_close for h in horizons}
-        return pred
+def train_test_prophet(df, test_hours=24):
+    # We do a simple train/test split
+    # Last test_hours as test, rest as train
+    if len(df) < test_hours + 24:
+        # Not enough data for a decent train/test split
+        return None, None, None, None
 
-    prophet_df = df.reset_index()[['date','Close']]
-    prophet_df = prophet_df.rename(columns={'date':'ds','Close':'y'})
-    # Prophet expects a ds column in datetime. We have hourly data
-    # Enable daily seasonality to capture intraday patterns
+    prophet_df = df.reset_index()[['date','Close']].rename(columns={'date':'ds','Close':'y'})
+    prophet_df = prophet_df.sort_values('ds')
+
+    # Split
+    train_df = prophet_df.iloc[:-test_hours]
+    test_df = prophet_df.iloc[-test_hours:]
+
     m = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=False)
-    m.fit(prophet_df)
+    m.fit(train_df)
 
-    future = m.make_future_dataframe(periods=48, freq='H')  # 48 hours forecast
-    forecast = m.predict(future)
-    forecast = forecast.set_index('ds')
+    future_test = m.make_future_dataframe(periods=test_hours, freq='H')
+    forecast_test = m.predict(future_test)
+    # Align test forecasts
+    test_forecast = forecast_test.set_index('ds').loc[test_df['ds']]
+    mape = mean_absolute_percentage_error(test_df['y'], test_forecast['yhat'])
+    accuracy = max(0, 100 - mape)
+
+    # Now do a full forecast 24 hours ahead for predictions
+    future_full = m.make_future_dataframe(periods=24, freq='H')
+    forecast_full = m.predict(future_full)
+    forecast_full = forecast_full.set_index('ds')
+    last_date = prophet_df['ds'].iloc[-1]
+
+    return m, forecast_full, accuracy, last_date
+
+def multi_horizon_forecast_with_accuracy(df, horizons=[8,16,24]):
+    if df.empty:
+        return {h: df['Close'].iloc[-1] for h in horizons}, 0.0
+
+    res = train_test_prophet(df, test_hours=24)
+    if res[0] is None:
+        # Fallback if no model
+        last_close = df['Close'].iloc[-1]
+        return {h: last_close for h in horizons}, 0.0
+
+    m, forecast_full, accuracy, last_date = res
 
     pred = {}
-    last_date = prophet_df['ds'].iloc[-1]
     for h in horizons:
         target_date = last_date + timedelta(hours=h)
-        if target_date in forecast.index:
-            pred[h] = forecast.loc[target_date, 'yhat']
+        if target_date in forecast_full.index:
+            pred[h] = forecast_full.loc[target_date, 'yhat']
         else:
-            # fallback to last known forecast
-            pred[h] = forecast['yhat'].iloc[-1]
+            pred[h] = forecast_full['yhat'].iloc[-1]
 
-    return pred
+    return pred, accuracy
 
 def classify_signal(df, position_open):
-    predictions = multi_horizon_forecast(df, horizons=[12,24,48])
+    predictions, accuracy = multi_horizon_forecast_with_accuracy(df, horizons=[8,16,24])
     if predictions is None:
         last_close = df['Close'].iloc[-1] if not df.empty else 100.0
-        predictions = {12: last_close, 24: last_close, 48: last_close}
+        predictions = {8: last_close, 16: last_close, 24: last_close}
+        accuracy = 0.0
 
-    # Extract predictions
-    p12 = predictions[12]
+    p8 = predictions[8]
+    p16 = predictions[16]
     p24 = predictions[24]
-    p48 = predictions[48]
 
-    # Compute volatility over the last 48 hours (2 days of hourly data)
     lookback = min(len(df), 48)
     volatility = df['Close'].tail(lookback).std() if lookback > 1 else 1
 
-    # Use the shortest horizon (12h) prediction as anchor for TP/SL
-    predicted_price = p12
+    # Use 8h prediction as anchor for TP/SL
+    predicted_price = p8
 
     last_row = df.iloc[-1]
     signal = last_row['Signal']
     rsi = last_row['RSI']
 
-    # Define strong TP/SL multipliers
-    # For a "strong" TP/SL, we might use a larger multiple of volatility, for example 2x
+    # Multipliers for strong TP/SL
     tp_factor = 2.0
     sl_factor = 2.0
 
@@ -356,9 +371,10 @@ def classify_signal(df, position_open):
         "Buy": "",
         "Sell": "",
         "Close position": "",
-        "Prediction (12h)": f"${p12:.2f}",
+        "Prediction (8h)": f"${p8:.2f}",
+        "Prediction (16h)": f"${p16:.2f}",
         "Prediction (24h)": f"${p24:.2f}",
-        "Prediction (48h)": f"${p48:.2f}",
+        "Model Accuracy": f"{accuracy:.2f}%",
         "Take Profit": "",
         "Stop Loss": ""
     }
@@ -388,7 +404,7 @@ def classify_signal(df, position_open):
     else:  # Neutral
         if position_open:
             signal_strength["Close position"] = "Consider Close"
-            # Slightly less aggressive TP/SL for neutral
+            # Less aggressive for neutral
             tp = predicted_price + (volatility * 1.0)
             sl = predicted_price - (volatility * 1.0)
             signal_strength["Take Profit"] = f"${tp:.2f}"
@@ -410,9 +426,10 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close position"],
-            "Prediction (1h)": classification["Prediction (1h)"],
-            "Prediction (6h)": classification["Prediction (6h)"],
-            "Prediction (12h)": classification["Prediction (12h)"],
+            "Prediction (8h)": classification["Prediction (8h)"],
+            "Prediction (16h)": classification["Prediction (16h)"],
+            "Prediction (24h)": classification["Prediction (24h)"],
+            "Model Accuracy": classification["Model Accuracy"],
             "Take Profit": classification["Take Profit"],
             "Stop Loss": classification["Stop Loss"]
         })
