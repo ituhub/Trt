@@ -92,7 +92,7 @@ def fetch_live_data(tickers, asset_class):
         st.error("API key not found in environment variables. Set 'FMP_API_KEY'.")
         return data
 
-    # Fetch 15-min data and resample to hourly for better intraday patterns
+    # Fetch 15-min data and resample to hourly
     for ticker in tickers:
         try:
             ticker_api = ticker.replace('/', '')
@@ -280,25 +280,16 @@ st.markdown("---")
 #############################################
 # MULTI-HORIZON FORECAST: 8h, 16h, 24h + Model Accuracy
 #############################################
-st.header("📊 Signals and Multi-Horizon (8h, 16h, 24h) Predictions with Model Accuracy")
-
-from sklearn.metrics import mean_absolute_error
 
 def mean_absolute_percentage_error(y_true, y_pred):
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
 def train_test_prophet(df, test_hours=24):
-    # We do a simple train/test split
-    # Last test_hours as test, rest as train
     if len(df) < test_hours + 24:
-        # Not enough data for a decent train/test split
         return None, None, None, None
 
-    prophet_df = df.reset_index()[['date','Close']].rename(columns={'date':'ds','Close':'y'})
-    prophet_df = prophet_df.sort_values('ds')
-
-    # Split
+    prophet_df = df.reset_index()[['date','Close']].rename(columns={'date':'ds','Close':'y'}).sort_values('ds')
     train_df = prophet_df.iloc[:-test_hours]
     test_df = prophet_df.iloc[-test_hours:]
 
@@ -307,26 +298,38 @@ def train_test_prophet(df, test_hours=24):
 
     future_test = m.make_future_dataframe(periods=test_hours, freq='H')
     forecast_test = m.predict(future_test)
-    # Align test forecasts
-    test_forecast = forecast_test.set_index('ds').loc[test_df['ds']]
-    mape = mean_absolute_percentage_error(test_df['y'], test_forecast['yhat'])
+
+    forecast_test = forecast_test.set_index('ds')
+    common_times = forecast_test.index.intersection(test_df['ds'])
+    if len(common_times) < 1:
+        return None, None, None, None
+
+    test_forecast = forecast_test.loc[common_times]
+    test_df = test_df[test_df['ds'].isin(common_times)]
+
+    if len(test_df) < 1:
+        return None, None, None, None
+
+    # Compute MAPE
+    y_true = test_df['y'].values
+    y_pred = test_forecast['yhat'].values
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
     accuracy = max(0, 100 - mape)
 
-    # Now do a full forecast 24 hours ahead for predictions
     future_full = m.make_future_dataframe(periods=24, freq='H')
-    forecast_full = m.predict(future_full)
-    forecast_full = forecast_full.set_index('ds')
+    forecast_full = m.predict(future_full).set_index('ds')
     last_date = prophet_df['ds'].iloc[-1]
 
     return m, forecast_full, accuracy, last_date
 
 def multi_horizon_forecast_with_accuracy(df, horizons=[8,16,24]):
     if df.empty:
-        return {h: df['Close'].iloc[-1] for h in horizons}, 0.0
+        last_close = df['Close'].iloc[-1] if not df.empty else 100.0
+        return {h: last_close for h in horizons}, 0.0
 
     res = train_test_prophet(df, test_hours=24)
     if res[0] is None:
-        # Fallback if no model
+        # Fallback if no model or no intersection
         last_close = df['Close'].iloc[-1]
         return {h: last_close for h in horizons}, 0.0
 
@@ -404,7 +407,6 @@ def classify_signal(df, position_open):
     else:  # Neutral
         if position_open:
             signal_strength["Close position"] = "Consider Close"
-            # Less aggressive for neutral
             tp = predicted_price + (volatility * 1.0)
             sl = predicted_price - (volatility * 1.0)
             signal_strength["Take Profit"] = f"${tp:.2f}"
