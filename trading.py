@@ -16,8 +16,8 @@ st.set_page_config(
 # Constants
 COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
 FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
-CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
-INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
+CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "BCH-USD"]
+INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "NVDA"]
 
 if 'initial_balance' not in st.session_state:
     st.session_state.initial_balance = 10000
@@ -410,9 +410,9 @@ for ticker in tickers:
             "Buy": classification["Buy"],
             "Sell": classification["Sell"],
             "Close position": classification["Close position"],
+            "Prediction (1h)": classification["Prediction (1h)"],
+            "Prediction (6h)": classification["Prediction (6h)"],
             "Prediction (12h)": classification["Prediction (12h)"],
-            "Prediction (24h)": classification["Prediction (24h)"],
-            "Prediction (48h)": classification["Prediction (48h)"],
             "Take Profit": classification["Take Profit"],
             "Stop Loss": classification["Stop Loss"]
         })
