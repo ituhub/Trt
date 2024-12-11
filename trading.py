@@ -10,7 +10,7 @@ from sklearn.metrics import mean_absolute_error
 from xgboost import XGBRegressor
 
 st.set_page_config(
-    page_title="Advanced Trading Bot Dashboard (8h, 16h, 24h Predictions, XGBoost, Bollinger Bands, Fibonacci)",
+    page_title="Advanced Trading Bot Dashboard with Enhanced Feature Engineering",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -34,13 +34,14 @@ if 'trade_history' not in st.session_state:
 if 'balance_history' not in st.session_state:
     st.session_state.balance_history = []
 
-st.title("🚀 Advanced Trading Bot Dashboard with XGBoost, Bollinger Bands & Fibonacci")
+st.title("🚀 Advanced Trading Bot Dashboard with Enhanced Feature Engineering")
 st.markdown("""
-Features:
-- Existing 8h, 16h, 24h Prophet-based predictions and accuracy.
-- **XGBoost** model for non-linear pattern detection in intraday forecasts.
-- **Bollinger Bands** for volatility analysis.
-- **Fibonacci Retracement** levels for potential support/resistance insights.
+This version includes:
+- Advanced feature engineering for the XGBoost model:
+  - Technical indicators (RSI, MACD, Bollinger Bands, Fibonacci Retracements)
+  - Time-based cyclical features (hour_of_day, day_of_week)
+  - Relative price difference features
+- The rest of the logic (Prophet predictions, signal generation, etc.) remains intact.
 """)
 
 st.sidebar.title("Navigation")
@@ -143,7 +144,6 @@ def compute_MACD(series):
     return macd, signal_line
 
 def compute_bollinger_bands(df, period=20, num_std=2):
-    # Middle band is SMA
     df['BB_Middle'] = df['Close'].rolling(window=period).mean()
     df['BB_Std'] = df['Close'].rolling(window=period).std()
     df['BB_Upper'] = df['BB_Middle'] + num_std * df['BB_Std']
@@ -151,7 +151,6 @@ def compute_bollinger_bands(df, period=20, num_std=2):
     return df
 
 def compute_fibonacci_levels(df, lookback=100):
-    # Simple method: find swing high/low in last lookback periods
     if len(df) < lookback:
         lookback = len(df)
     recent_data = df.tail(lookback)
@@ -307,7 +306,7 @@ else:
 st.markdown("---")
 
 #############################################
-# MULTI-HORIZON FORECAST: 8h, 16h, 24h + Model Accuracy (Prophet)
+# Forecasting and Feature Engineering for Prophet and XGBoost
 #############################################
 
 def mean_absolute_percentage_error(y_true, y_pred):
@@ -370,85 +369,119 @@ def multi_horizon_forecast_with_accuracy_prophet(df, horizons=[8,16,24]):
     return pred, accuracy
 
 #############################################
-# XGBoost Forecasting
+# Enhanced Feature Engineering for XGBoost
 #############################################
-def create_xgb_features(df, max_lag=6):
-    # Example: create lag features for Close
-    # For a more advanced model, add RSI, MACD, Bollinger as features.
+def create_xgb_features(df):
     dff = df.copy()
+
+    # Time-based features
+    dff['hour'] = dff.index.hour
+    dff['day_of_week'] = dff.index.dayofweek
+    # Cyclical encoding for hour_of_day (24h cycle)
+    dff['hour_sin'] = np.sin(2 * np.pi * dff['hour'] / 24)
+    dff['hour_cos'] = np.cos(2 * np.pi * dff['hour'] / 24)
+    # Cyclical encoding for day_of_week (7-day cycle)
+    dff['dow_sin'] = np.sin(2 * np.pi * dff['day_of_week'] / 7)
+    dff['dow_cos'] = np.cos(2 * np.pi * dff['day_of_week'] / 7)
+
+    # Lag features
+    max_lag = 6
     for i in range(1, max_lag+1):
         dff[f'Close_lag_{i}'] = dff['Close'].shift(i)
-    dff = dff.dropna()
-    return dff
+
+    # Relative features
+    # Close relative to Bollinger bands and Fibonacci levels
+    if 'BB_Middle' in dff.columns:
+        dff['Close_minus_BB_Mid'] = dff['Close'] - dff['BB_Middle']
+    if 'Fibo_50.0' in dff.columns:
+        dff['Close_minus_Fibo_50'] = dff['Close'] - dff['Fibo_50.0']
+
+    # Use RSI, MACD, Bollinger, Fibonacci as features directly if present
+    feature_candidates = [
+        'RSI','MACD','MACD_Signal',
+        'BB_Middle','BB_Upper','BB_Lower',
+        'Fibo_23.6','Fibo_38.2','Fibo_50.0','Fibo_61.8',
+        'Close_minus_BB_Mid','Close_minus_Fibo_50'
+    ]
+
+    dff = dff.dropna(subset=['Close'] + [f'Close_lag_{i}' for i in range(1, max_lag+1)])
+    return dff, feature_candidates
 
 def xgb_forecast(df, horizons=[8,16,24]):
-    # Train a simple XGBoost model on historical data to predict future Close
-    # We'll train separate models for each horizon for simplicity.
-    # A more advanced approach would use a single model with horizon as a feature.
-
-    if len(df) < 50:
-        # Not enough data for training
+    if len(df) < 100:
+        # Need more data for feature engineering
         last_close = df['Close'].iloc[-1]
         return {h: last_close for h in horizons}
 
-    dff = create_xgb_features(df)
-    # Use the last part as test; we just want predictions for future steps.
-    # We'll train on all historical (minus last day) and predict next steps.
-    # Since we can't "predict the future" directly, we simulate by training on all data and using last row as input.
+    dff, feature_candidates = create_xgb_features(df)
 
-    preds = {}
-    # Features: all lag columns
-    feature_cols = [c for c in dff.columns if 'lag' in c or c in ['RSI','MACD','MACD_Signal','BB_Middle','BB_Upper','BB_Lower']]
-    # Fill missing due to initial computations
-    dff = dff.dropna(subset=feature_cols)
+    # Ensure all required features are present
+    valid_features = [c for c in feature_candidates if c in dff.columns]
+    lag_features = [c for c in dff.columns if 'lag_' in c]
+    time_features = ['hour_sin','hour_cos','dow_sin','dow_cos']
+    all_features = valid_features + lag_features + time_features
 
-    X = dff[feature_cols]
+    dff = dff.dropna(subset=all_features)
+    if len(dff) < 50:
+        last_close = df['Close'].iloc[-1]
+        return {h: last_close for h in horizons}
+
+    X = dff[all_features]
     y = dff['Close']
-    if len(X) < 50:
-        # fallback
-        last_close = df['Close'].iloc[-1]
-        return {h: last_close for h in horizons}
 
-    # Train/test split
-    # We'll just train on entire history for simplicity now
     model = XGBRegressor(n_estimators=50, max_depth=3, learning_rate=0.1)
     model.fit(X, y)
 
-    # For prediction, take the last known row as input and predict future steps by shifting lags forward
-    # We'll simulate iterative forecasting.
-    last_row = dff.iloc[-1].copy()
-    current_vals = last_row.copy()
+    # Predict future by iterative forecasting
+    current_vals = dff.iloc[-1].copy()
 
     def shift_lags(vals, new_close):
-        # shift lag features up by one step
         for i in range(6,0,-1):
             vals[f'Close_lag_{i}'] = vals[f'Close_lag_{i-1}'] if i>1 else new_close
 
+    preds = {}
+    # We'll simulate future steps by iteratively updating lag features, hour_of_day, day_of_week
+    # Assume we proceed hour by hour:
+    current_dt = dff.index[-1]
     for h in horizons:
-        # predict h times in steps of 1
         steps = h
         temp_vals = current_vals.copy()
+
+        # We'll forecast hour by hour
         for step in range(1, steps+1):
-            X_pred = temp_vals[feature_cols].values.reshape(1,-1)
+            future_dt = current_dt + timedelta(hours=step)
+            # Update time features
+            future_hour = future_dt.hour
+            future_dow = future_dt.dayofweek
+            temp_vals['hour'] = future_hour
+            temp_vals['day_of_week'] = future_dow
+            temp_vals['hour_sin'] = np.sin(2 * np.pi * future_hour / 24)
+            temp_vals['hour_cos'] = np.cos(2 * np.pi * future_hour / 24)
+            temp_vals['dow_sin'] = np.sin(2 * np.pi * future_dow / 7)
+            temp_vals['dow_cos'] = np.cos(2 * np.pi * future_dow / 7)
+
+            X_pred = temp_vals[all_features].values.reshape(1,-1)
             pred_close = model.predict(X_pred)[0]
-            # Update temp_vals lags
+
+            # Update lag features for next step
             shift_lags(temp_vals, pred_close)
+
+            # Also update relative features if possible
+            # Without future BB_Mid or Fibo_50 it's tricky, we assume they remain static
+            # or based on last known
+            # For simplicity, we won't update these levels dynamically in this simulation
         preds[h] = pred_close
 
     return preds
 
 def classify_signal(df, position_open):
-    # Get Prophet-based predictions
     prophet_preds, prophet_acc = multi_horizon_forecast_with_accuracy_prophet(df, horizons=[8,16,24])
-
-    # Get XGBoost-based predictions
     xgb_preds = xgb_forecast(df, horizons=[8,16,24])
 
-    # Combine predictions by averaging Prophet & XGBoost for a more robust forecast
     p8 = (prophet_preds[8] + xgb_preds[8]) / 2
     p16 = (prophet_preds[16] + xgb_preds[16]) / 2
     p24 = (prophet_preds[24] + xgb_preds[24]) / 2
-    accuracy = prophet_acc  # using Prophet accuracy as a proxy
+    accuracy = prophet_acc
 
     lookback = min(len(df), 48)
     volatility = df['Close'].tail(lookback).std() if lookback > 1 else 1
@@ -573,7 +606,6 @@ for ticker in tickers:
             x=df.index, y=df['BB_Lower'], line=dict(width=1, color='red'), name='BB Lower'
         ))
 
-        # Fibonacci lines
         fib_cols = [c for c in df.columns if 'Fibo_' in c]
         for fib_c in fib_cols:
             fig.add_trace(go.Scatter(
