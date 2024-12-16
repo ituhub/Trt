@@ -16,8 +16,6 @@ st.set_page_config(
 )
 
 # Constants
-COMMODITIES = ["GC=F", "SI=F", "NG=F", "KC=F"]
-FOREX_SYMBOLS = ["EURUSD=X", "USDJPY=X", "GBPUSD=X", "AUDUSD=X"]
 CRYPTO_SYMBOLS = ["BTC-USD", "ETH-USD", "DOT-USD", "LTC-USD"]
 INDICES_SYMBOLS = ["^GSPC", "^GDAXI", "^HSI", "000300.SS"]
 
@@ -45,20 +43,12 @@ This version includes:
 """)
 
 st.sidebar.title("Navigation")
-section = st.sidebar.radio("Select Asset Class", ["Forex", "Commodities", "Indices", "Cryptocurrency"])
+section = st.sidebar.radio("Select Asset Class", ["Indices", "Cryptocurrency"])
 
 tickers = []
 asset_class = None
 
-if section == "Forex":
-    st.header("💱 Top Forex Pairs")
-    tickers = FOREX_SYMBOLS
-    asset_class = 'Forex'
-elif section == "Commodities":
-    st.header("🌐 Top Commodities")
-    tickers = COMMODITIES
-    asset_class = 'Commodities'
-elif section == "Indices":
+if section == "Indices":
     st.header("📊 Global Indices Overview")
     tickers = INDICES_SYMBOLS
     asset_class = 'Indices'
